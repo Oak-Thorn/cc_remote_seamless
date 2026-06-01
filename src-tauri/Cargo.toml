@@ -1,0 +1,33 @@
+[package]
+name = "cc-remote-seamless"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+rusqlite = { version = "0.31", features = ["bundled"] }
+portable-pty = "0.8"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+directories = "5"
+toml = "0.8"
+async-trait = "0.1"
+chrono = "0.4"
+libc = "0.2"
+reqwest = { version = "0.12", features = ["json"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lib]
+name = "cc_remote_seamless_lib"
+crate-type = ["lib", "cdylib", "staticlib"]

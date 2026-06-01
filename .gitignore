@@ -1,0 +1,39 @@
+# Build outputs
+target/
+dist/
+node_modules/
+src-tauri/gen/
+
+# Compiled binaries
+sidecar/feishu-gateway/feishu-gateway
+
+# Environment & secrets
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+._*
+
+# IDE / tool local config
+.idea/
+.claude/
+.codegraph/
+.cursor/
+.opencode/
+.omc/
+.superpowers/
+
+# Scratch / temp
+tmp.txt
+*.tmp
+.tmp_*
+PLAN.md
+PLAN-*.md
+tmp/
+
+# External services (not part of core)
+third_service/
+
+# Debug logs
+logs/

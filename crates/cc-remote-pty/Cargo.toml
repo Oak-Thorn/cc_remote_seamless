@@ -1,0 +1,21 @@
+[package]
+name = "cc-remote-pty"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cc-remote-pty"
+path = "src/main.rs"
+
+[dependencies]
+portable-pty = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

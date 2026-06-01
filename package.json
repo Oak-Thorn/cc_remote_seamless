@@ -1,0 +1,31 @@
+{
+  "name": "cc-remote-seamless",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-shell": "^2",
+    "pinia": "^2.1",
+    "vue": "^3.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
+    "@vitejs/plugin-vue": "^5",
+    "@vue/test-utils": "^2.4.10",
+    "happy-dom": "^20.9.0",
+    "typescript": "^5.4",
+    "vite": "^5",
+    "vite-svg-loader": "^5.1.1",
+    "vitest": "^4.1.7",
+    "vue-tsc": "^2"
+  }
+}

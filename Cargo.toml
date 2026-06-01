@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "src-tauri",
+    "crates/cc-remote-pty",
+]
+resolver = "2"
