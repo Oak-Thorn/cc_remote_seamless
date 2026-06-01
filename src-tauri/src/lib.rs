@@ -403,6 +403,7 @@ pub fn run() {
             commands::pin_session,
             commands::get_active_session,
             commands::get_config_path,
+            commands::get_home_dir,
             commands::open_config_dir,
             commands::read_config_file,
             commands::open_settings,

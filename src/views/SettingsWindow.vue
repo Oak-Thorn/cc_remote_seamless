@@ -33,7 +33,9 @@ function close() {
 
 onMounted(async () => {
   await invoke("fix_svg_icons").catch(() => {});
-  configPath.value = await invoke<string>("get_config_path").catch(() => "~/.cc-remote/config.toml");
+  const raw = await invoke<string>("get_config_path").catch(() => "~/.cc-remote/config.toml");
+  const home = await invoke<string>("get_home_dir").catch(() => "");
+  configPath.value = home && raw.startsWith(home) ? "~" + raw.slice(home.length) : raw;
   configContent.value = await invoke<string>("read_config_file").catch(() => "");
   await settings.loadAvailableSounds();
   await reloadIcons();

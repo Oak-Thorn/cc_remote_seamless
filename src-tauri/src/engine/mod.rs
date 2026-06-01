@@ -271,7 +271,7 @@ fn resolve_engine_sound_path(name: &str, resource_dir: Option<&str>) -> String {
 
     // Tauri resource directory (bundled sounds)
     if let Some(res_dir) = resource_dir {
-        let sounds_dir = std::path::Path::new(res_dir).join("sounds");
+        let sounds_dir = std::path::Path::new(res_dir).join("resources").join("sounds");
         for ext in &sound_exts {
             let path = sounds_dir.join(format!("{}.{}", name, ext));
             if path.exists() {

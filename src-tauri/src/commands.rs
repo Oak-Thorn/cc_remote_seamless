@@ -130,6 +130,13 @@ pub async fn get_config_path() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn get_home_dir() -> Result<String, String> {
+    directories::BaseDirs::new()
+        .map(|d| d.home_dir().to_string_lossy().to_string())
+        .ok_or_else(|| "Cannot determine home directory".to_string())
+}
+
+#[tauri::command]
 pub async fn open_config_dir() -> Result<(), String> {
     let dir = directories::BaseDirs::new()
         .map(|d| d.home_dir().join(".cc-remote"))
@@ -299,7 +306,7 @@ fn build_search_dirs(app: Option<&AppHandle>) -> Vec<std::path::PathBuf> {
     // Tauri resource directory (bundled in production)
     if let Some(app_handle) = app {
         if let Ok(resource_dir) = app_handle.path().resource_dir() {
-            dirs.push(resource_dir.join("sounds"));
+            dirs.push(resource_dir.join("resources").join("sounds"));
         }
     }
 
