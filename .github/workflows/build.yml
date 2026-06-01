@@ -41,7 +41,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: '. -> target'
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -66,6 +66,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tauriScript: npx tauri
           args: --target ${{ matrix.target }}
 
       - name: Upload artifacts
