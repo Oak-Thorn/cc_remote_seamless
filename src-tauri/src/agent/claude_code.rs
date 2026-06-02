@@ -13,6 +13,7 @@ struct PtyConnection {
 pub struct ClaudeCodeConnector {
     sessions: RwLock<HashMap<String, PtyConnection>>,
     event_senders: Mutex<Vec<EventSender>>,
+    #[allow(dead_code)]
     socket_dir: String,
 }
 

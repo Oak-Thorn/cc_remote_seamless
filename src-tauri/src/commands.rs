@@ -3,7 +3,7 @@ use crate::engine::store::StoredMessage;
 use crate::engine::Engine;
 use crate::hook::server::{PermissionResponse, PermissionWaiters};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 pub type EngineState = Arc<Mutex<Engine>>;
@@ -173,6 +173,90 @@ pub async fn read_config_file() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn start_feishu_register(app: AppHandle) -> Result<(), String> {
+    let script = app.path().resource_dir()
+        .map(|d| d.join("../../scripts/feishu-register.mjs"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("scripts/feishu-register.mjs"));
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .map(|d| std::path::PathBuf::from(d).parent().unwrap_or(std::path::Path::new(".")).to_path_buf())
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+
+    let script_path = if script.exists() {
+        script
+    } else {
+        manifest_dir.join("scripts").join("feishu-register.mjs")
+    };
+
+    tokio::spawn(async move {
+        let child = tokio::process::Command::new("node")
+            .arg(&script_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = app.emit("feishu-register-error", serde_json::json!({
+                    "code": "spawn_failed",
+                    "description": format!("Failed to run node: {}", e)
+                }));
+                return;
+            }
+        };
+
+        let stdout = child.stdout.take().unwrap();
+        let reader = tokio::io::BufReader::new(stdout);
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                match val.get("type").and_then(|t| t.as_str()) {
+                    Some("qr") => { let _ = app.emit("feishu-register-qr", val); }
+                    Some("done") => {
+                        if let (Some(id), Some(secret)) = (
+                            val.get("client_id").and_then(|v| v.as_str()),
+                            val.get("client_secret").and_then(|v| v.as_str()),
+                        ) {
+                            save_feishu_credentials(id, secret);
+                        }
+                        let _ = app.emit("feishu-register-done", val);
+                    }
+                    Some("error") => { let _ = app.emit("feishu-register-error", val); }
+                    _ => {}
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn save_feishu_credentials(app_id: &str, app_secret: &str) {
+    let Some(base) = directories::BaseDirs::new() else { return };
+    let dir = base.home_dir().join(".cc-remote");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("config.toml");
+
+    let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+    let section = format!(
+        "\n[platforms.feishu-auto]\ntype = \"feishu\"\napp_id = \"{}\"\napp_secret = \"{}\"\nchat_id = \"\"\n",
+        app_id, app_secret
+    );
+
+    if !content.contains("[platforms.feishu-auto]") {
+        content.push_str(&section);
+    } else {
+        // Already exists - skip
+        return;
+    }
+
+    let _ = std::fs::write(&path, content);
+}
+
+#[tauri::command]
 pub async fn open_settings(app: AppHandle) -> Result<(), String> {
     crate::window::open_settings_window(&app)
 }
@@ -213,10 +297,10 @@ pub async fn open_terminal(session_id: String) -> Result<(), String> {
     if tty_name.is_empty() {
         return Err(format!("cannot find TTY for pid {}", pid));
     }
-    let tty_path = format!("/dev/{}", tty_name);
 
     #[cfg(target_os = "macos")]
     {
+        let tty_path = format!("/dev/{}", tty_name);
         let script = format!(
             r#"tell application "Terminal"
     activate
