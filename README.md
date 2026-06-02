@@ -12,9 +12,14 @@
 </p>
 
 <p align="center">
-  <img src="pictures/d2cecbeec0014d90c681b4808b1f7b56_720.jpg" width="320" alt="IM Screenshot 1">
+  <img src="pictures/claudecode_feishu.png" width="320" alt="Claude Code Feishu">
   &nbsp;&nbsp;
-  <img src="pictures/3384448123905f639c6659271461bc79_720.jpg" width="320" alt="IM Screenshot 2">
+  <img src="pictures/claudecode_telegram.png" width="320" alt="Claude Code Telegram">
+</p>
+<p align="center">
+  <img src="pictures/feishu.jpg" width="320" alt="Feishu">
+  &nbsp;&nbsp;
+  <img src="pictures/telegram.jpg" width="320" alt="Telegram">
 </p>
 
 Remote control your running Claude Code / Pi Agent CLI sessions via Feishu or Telegram. Walk away from your computer and keep interacting with your Agent from your phone.

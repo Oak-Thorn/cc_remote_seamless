@@ -12,9 +12,14 @@
 </p>
 
 <p align="center">
-  <img src="pictures/d2cecbeec0014d90c681b4808b1f7b56_720.jpg" width="320" alt="IM 截图 1">
+  <img src="pictures/claudecode_feishu.png" width="320" alt="Claude Code 飞书">
   &nbsp;&nbsp;
-  <img src="pictures/3384448123905f639c6659271461bc79_720.jpg" width="320" alt="IM 截图 2">
+  <img src="pictures/claudecode_telegram.png" width="320" alt="Claude Code Telegram">
+</p>
+<p align="center">
+  <img src="pictures/feishu.jpg" width="320" alt="飞书">
+  &nbsp;&nbsp;
+  <img src="pictures/telegram.jpg" width="320" alt="Telegram">
 </p>
 
 通过飞书或 Telegram 远程控制正在运行的 Claude Code / Pi Agent CLI 会话。离开电脑时，用手机继续与 Agent 交互。
