@@ -1,15 +1,20 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { useSettingsStore } from "../stores/settings";
 import FloatingIconView from "../components/icons/FloatingIcon.vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
+import QRCode from "qrcode";
 
 const settings = useSettingsStore();
 const activeTab = ref<"icon" | "sound" | "config" | "about">("icon");
 const configPath = ref("");
 const configContent = ref("");
+const qrDataUrl = ref("");
+const qrStatus = ref<"idle" | "loading" | "waiting" | "done" | "error">("idle");
+const qrError = ref("");
+const qrExpireIn = ref(0);
 
 // Dynamically discover all SVG icons from the resources directory.
 // Adding a new .svg file to src-tauri/resources/icons/ will auto-register it.
@@ -40,6 +45,36 @@ onMounted(async () => {
   await settings.loadAvailableSounds();
   await reloadIcons();
 });
+
+const unlisteners: Array<() => void> = [];
+onMounted(async () => {
+  unlisteners.push(await listen<any>("feishu-register-qr", async (e) => {
+    qrStatus.value = "waiting";
+    qrExpireIn.value = e.payload.expireIn || 300;
+    qrDataUrl.value = await QRCode.toDataURL(e.payload.url, { width: 200, margin: 1 });
+  }));
+  unlisteners.push(await listen<any>("feishu-register-done", async () => {
+    qrStatus.value = "done";
+    qrDataUrl.value = "";
+    configContent.value = await invoke<string>("read_config_file").catch(() => "");
+  }));
+  unlisteners.push(await listen<any>("feishu-register-error", (e) => {
+    qrStatus.value = "error";
+    qrError.value = e.payload.description || "Unknown error";
+    qrDataUrl.value = "";
+  }));
+});
+onUnmounted(() => { unlisteners.forEach(fn => fn()); });
+
+async function startFeishuRegister() {
+  qrStatus.value = "loading";
+  qrError.value = "";
+  qrDataUrl.value = "";
+  await invoke("start_feishu_register").catch((e: any) => {
+    qrStatus.value = "error";
+    qrError.value = String(e);
+  });
+}
 
 function openConfigDir() {
   invoke("open_config_dir").catch((e) => console.warn("open_config_dir failed:", e));
@@ -165,10 +200,90 @@ async function reloadSounds() {
         </div>
         <!-- Config File -->
         <div v-else-if="activeTab === 'config'" class="panel">
-          <h3>Config File</h3>
+          <h3>Config Feishu</h3>
+          <div class="setup-steps">
+            <div class="step-item">
+              <div class="step-header">
+                <span class="step-number">1</span>
+                <span class="step-title">Create Feishu App</span>
+                <button v-if="qrStatus === 'idle' || qrStatus === 'error' || qrStatus === 'done'" class="open-dir-btn" @click="startFeishuRegister">Scan to Create</button>
+              </div>
+              <div class="step-body">
+                <div v-if="qrStatus === 'loading'" class="feishu-status">Connecting...</div>
+                <div v-else-if="qrStatus === 'waiting'" class="feishu-qr-area">
+                  <img :src="qrDataUrl" class="feishu-qr-img" alt="Scan with Feishu" />
+                  <span class="feishu-hint">Open Feishu and scan (expires in {{ qrExpireIn }}s)</span>
+                </div>
+                <div v-else-if="qrStatus === 'done'" class="feishu-status feishu-success">App created! Credentials saved.</div>
+                <div v-else-if="qrStatus === 'error'" class="feishu-status feishu-error">{{ qrError }}</div>
+                <p v-else class="step-desc">Scan QR code with Feishu to create a bot app automatically.</p>
+              </div>
+            </div>
+            <div class="step-item">
+              <div class="step-header">
+                <span class="step-number">2</span>
+                <span class="step-title">Get chat_id</span>
+              </div>
+              <div class="step-body">
+                <p class="step-desc">From the Feishu App's agent settings page, copy the <code>chat_id</code>.</p>
+                <p class="step-desc step-format">Format: <code>oc_xxxx</code></p>
+              </div>
+            </div>
+            <div class="step-item">
+              <div class="step-header">
+                <span class="step-number">3</span>
+                <span class="step-title">Edit Config</span>
+                <button class="open-dir-btn" @click="openConfigDir">Open Directory</button>
+              </div>
+              <div class="step-body">
+                <p class="step-desc">Open config file and fill in the <code>chat_id</code> field.</p>
+              </div>
+            </div>
+          </div>
+
+          <h3>Config Telegram</h3>
+          <div class="setup-steps">
+            <div class="step-item">
+              <div class="step-header">
+                <span class="step-number">1</span>
+                <span class="step-title">Create Bot</span>
+              </div>
+              <div class="step-body">
+                <p class="step-desc">Send <code>/newbot</code> to <a href="https://t.me/BotFather" target="_blank" class="step-link">@BotFather</a> on Telegram and follow prompts to create a bot.</p>
+                <p class="step-desc step-format">Copy the <code>bot_token</code> from BotFather's reply.</p>
+              </div>
+            </div>
+            <div class="step-item">
+              <div class="step-header">
+                <span class="step-number">2</span>
+                <span class="step-title">Get chat_id</span>
+              </div>
+              <div class="step-body">
+                <p class="step-desc">Send any message to your bot, then visit:</p>
+                <p class="step-desc step-format"><code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code></p>
+                <p class="step-desc step-format">Find <code>chat.id</code> in the response (a numeric ID).</p>
+              </div>
+            </div>
+            <div class="step-item">
+              <div class="step-header">
+                <span class="step-number">3</span>
+                <span class="step-title">Edit Config</span>
+                <button class="open-dir-btn" @click="openConfigDir">Open Directory</button>
+              </div>
+              <div class="step-body">
+                <p class="step-desc">Add the following to your config file:</p>
+                <pre class="step-code">[platforms.telegram]
+type = "telegram"
+bot_token = "&lt;your_bot_token&gt;"
+chat_id = "&lt;your_chat_id&gt;"</pre>
+              </div>
+            </div>
+          </div>
+
+          <h3>Config File Info</h3>
           <div class="config-header">
             <code class="config-path-text">{{ configPath }}</code>
-            <button class="open-dir-btn" @click="openConfigDir">Open Directory</button>
+            <button class="open-dir-btn" @click="openConfigDir">Open</button>
           </div>
           <textarea class="config-viewer" readonly :value="configContent || '(file not found or empty)'" />
         </div>
@@ -226,4 +341,26 @@ async function reloadSounds() {
 .custom-dir-path { font-size: 11px; color: #475569; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .custom-icon-svg { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; }
 .custom-icon-svg :deep(svg) { width: 100%; height: 100%; }
+.feishu-register-section { margin-bottom: 16px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+.feishu-register-header { display: flex; align-items: center; justify-content: space-between; }
+.feishu-label { font-size: 12px; font-weight: 600; color: #475569; }
+.feishu-qr-area { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 8px; }
+.feishu-qr-img { width: 160px; height: 160px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.feishu-hint { font-size: 11px; color: #64748b; }
+.feishu-status { font-size: 11px; color: #64748b; margin-top: 4px; }
+.feishu-success { color: #16a34a; font-weight: 500; }
+.feishu-error { color: #dc2626; }
+.setup-steps { display: flex; flex-direction: column; gap: 0; margin-bottom: 16px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+.step-item { padding: 12px 14px; border-bottom: 1px solid #e2e8f0; }
+.step-item:last-child { border-bottom: none; }
+.step-header { display: flex; align-items: center; gap: 10px; }
+.step-number { width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; color: #fff; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.step-title { font-size: 12px; font-weight: 600; color: #374151; flex: 1; }
+.step-body { margin-top: 6px; padding-left: 30px; }
+.step-desc { font-size: 11px; color: #64748b; margin: 0; line-height: 1.5; }
+.step-desc code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 11px; color: #334155; }
+.step-format { margin-top: 4px; }
+.step-link { color: #3b82f6; text-decoration: none; }
+.step-link:hover { text-decoration: underline; }
+.step-code { font-family: monospace; font-size: 11px; color: #334155; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px 10px; margin: 6px 0 0 0; white-space: pre; line-height: 1.6; }
 </style>
