@@ -39,7 +39,7 @@ Remote control your running Claude Code / Pi Agent CLI sessions via Feishu or Te
 
 ## Install
 
-Download the latest release from [GitHub Releases](https://github.com/Oak-Thorn/cc_remote_seamless/releases).
+Download the latest release from [GitHub Releases](https://github.com/Oak-Thorn/cc_remote_seamless/releases). See [Usage Guide](USAGE.md) for configuration details.
 
 ### macOS
 

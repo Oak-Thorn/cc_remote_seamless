@@ -39,7 +39,7 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/Oak-Thorn/cc_remote_seamless/releases) 下载最新版本。
+从 [GitHub Releases](https://github.com/Oak-Thorn/cc_remote_seamless/releases) 下载最新版本。配置说明详见 [使用指南](USAGE.md)。
 
 ### macOS
 
