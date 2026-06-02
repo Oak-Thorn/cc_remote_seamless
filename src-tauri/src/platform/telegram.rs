@@ -70,6 +70,7 @@ impl IMPlatform for TelegramPlatform {
         let bot_token = self.bot_token.clone();
         let allowed_chat_id = self.chat_id.clone();
         let senders = self.message_senders.lock().unwrap().clone();
+        let platform_id = self.id.clone();
 
         tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -120,7 +121,7 @@ impl IMPlatform for TelegramPlatform {
                                     chat_id: chat_id_str,
                                     text,
                                     sender,
-                                    platform: "telegram".to_string(),
+                                    platform: platform_id.clone(),
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap()
@@ -147,7 +148,6 @@ impl IMPlatform for TelegramPlatform {
             .json(&serde_json::json!({
                 "chat_id": chat_id,
                 "text": text,
-                "parse_mode": "Markdown",
             }))
             .send()
             .await
