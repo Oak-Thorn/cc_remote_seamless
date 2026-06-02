@@ -199,7 +199,17 @@ impl AgentConnector for PiConnector {
 }
 
 fn process_alive(pid: i32) -> bool {
-    unsafe { libc::kill(pid, 0) == 0 }
+    #[cfg(unix)]
+    { unsafe { libc::kill(pid, 0) == 0 } }
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+            .output()
+            .map(|o| !String::from_utf8_lossy(&o.stdout).contains("No tasks"))
+            .unwrap_or(false)
+    }
 }
 
 async fn inject_via_http(port: u16, text: &str) -> Result<(), String> {
