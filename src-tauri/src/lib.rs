@@ -406,6 +406,7 @@ pub fn run() {
             commands::get_home_dir,
             commands::open_config_dir,
             commands::read_config_file,
+            commands::start_feishu_register,
             commands::open_settings,
             commands::open_terminal,
             commands::play_sound,
