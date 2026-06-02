@@ -239,31 +239,19 @@ async fn inject_via_tty(pid: i32, text: &str) -> Result<(), String> {
     let script = match terminal_app.as_str() {
         "iTerm2" | "iTerm" => format!(
             r#"
-set the clipboard to "{text}"
 tell application "iTerm2"
     repeat with w in windows
         repeat with t in tabs of w
             repeat with s in sessions of t
                 if tty of s is "{tty}" then
-                    tell t to select
-                    tell w
-                        set index to 1
-                    end tell
+                    tell s to write text "{text}"
+                    return "ok"
                 end if
             end repeat
         end repeat
     end repeat
-    activate
 end tell
-delay 0.15
-tell application "System Events"
-    tell process "iTerm2"
-        keystroke "v" using command down
-        delay 0.1
-        keystroke return
-    end tell
-end tell
-return "ok"
+return "not_found"
 "#,
             tty = tty_path, text = escaped_text,
         ),
@@ -271,14 +259,19 @@ return "ok"
             r#"
 set the clipboard to "{text}"
 tell application "Terminal"
+    set found to false
     repeat with w in windows
         repeat with t in tabs of w
             if tty of t is "{tty}" then
                 set selected of t to true
                 set frontmost of w to true
+                set found to true
+                exit repeat
             end if
         end repeat
+        if found then exit repeat
     end repeat
+    if not found then return "not_found"
     activate
 end tell
 delay 0.15
@@ -304,6 +297,11 @@ return "ok"
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("AppleScript inject failed: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout == "not_found" {
+        return Err(format!("TTY {} not found in {} tabs", tty_path, terminal_app));
     }
 
     info!("Injected input to pi session pid={} via {}", pid, terminal_app);

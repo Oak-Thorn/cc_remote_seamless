@@ -322,52 +322,58 @@ impl AgentConnector for ClaudeCodeConnector {
             match terminal_app.as_str() {
                 "iTerm2" | "iTerm" => format!(
                     r#"
-tell application "iTerm2"
-    repeat with w in windows
-        repeat with t in tabs of w
-            repeat with s in sessions of t
-                if tty of s is "{tty}" then
-                    tell t to select
-                    tell w
-                        set index to 1
-                    end tell
-                end if
+with timeout of 30 seconds
+    tell application "iTerm2"
+        repeat with w in windows
+            repeat with t in tabs of w
+                repeat with s in sessions of t
+                    if tty of s is "{tty}" then
+                        tell t to select
+                        tell w
+                            set index to 1
+                        end tell
+                        activate
+                        delay 0.1
+                        tell application "System Events"
+                            tell process "iTerm2"
+                                {keystroke}
+                            end tell
+                        end tell
+                        return "ok"
+                    end if
+                end repeat
             end repeat
         end repeat
-    end repeat
-    activate
-end tell
-delay 0.1
-tell application "System Events"
-    tell process "iTerm2"
-        {keystroke}
     end tell
-end tell
-return "ok"
+end timeout
+return "not_found"
 "#,
                     tty = tty_path,
                     keystroke = keystroke_cmd,
                 ),
                 _ => format!(
                     r#"
-tell application "Terminal"
-    repeat with w in windows
-        repeat with t in tabs of w
-            if tty of t is "{tty}" then
-                set selected of t to true
-                set frontmost of w to true
-            end if
+with timeout of 30 seconds
+    tell application "Terminal"
+        repeat with w in windows
+            repeat with t in tabs of w
+                if tty of t is "{tty}" then
+                    set selected of t to true
+                    set frontmost of w to true
+                    activate
+                    delay 0.1
+                    tell application "System Events"
+                        tell process "Terminal"
+                            {keystroke}
+                        end tell
+                    end tell
+                    return "ok"
+                end if
+            end repeat
         end repeat
-    end repeat
-    activate
-end tell
-delay 0.1
-tell application "System Events"
-    tell process "Terminal"
-        {keystroke}
     end tell
-end tell
-return "ok"
+end timeout
+return "not_found"
 "#,
                     tty = tty_path,
                     keystroke = keystroke_cmd,
@@ -376,41 +382,27 @@ return "ok"
         } else {
         match terminal_app.as_str() {
             "iTerm2" | "iTerm" => {
-                // Clipboard paste + keystroke return via System Events (most reliable)
                 format!(
                     r#"
-set the clipboard to "{text}"
 tell application "iTerm2"
     repeat with w in windows
         repeat with t in tabs of w
             repeat with s in sessions of t
                 if tty of s is "{tty}" then
-                    tell t to select
-                    tell w
-                        set index to 1
-                    end tell
+                    tell s to write text "{text}"
+                    return "ok"
                 end if
             end repeat
         end repeat
     end repeat
-    activate
 end tell
-delay 0.15
-tell application "System Events"
-    tell process "iTerm2"
-        keystroke "v" using command down
-        delay 0.1
-        keystroke return
-    end tell
-end tell
-return "ok"
+return "not_found"
 "#,
                     tty = tty_path,
                     text = escaped_text,
                 )
             }
             _ => {
-                // Terminal.app fallback: clipboard paste + explicit Enter
                 format!(
                     r#"
 set the clipboard to "{text}"
@@ -422,8 +414,10 @@ tell application "Terminal"
                 set selected of t to true
                 set frontmost of w to true
                 set found to true
+                exit repeat
             end if
         end repeat
+        if found then exit repeat
     end repeat
     if not found then return "not_found"
     activate
