@@ -37,6 +37,24 @@ Remote control your running Claude Code / Pi Agent CLI sessions via Feishu or Te
 - **Auto hook installation** — Claude Code hooks configured automatically on startup
 - **No public IP needed** — Feishu WebSocket + Telegram long polling, client-initiated connections
 
+## Install
+
+Download the latest release from [GitHub Releases](https://github.com/Oak-Thorn/cc_remote_seamless/releases).
+
+### macOS
+
+After mounting the DMG and dragging the app to Applications, macOS Gatekeeper may report the app as "damaged" because it is not code-signed. Run the following command to fix it:
+
+```bash
+xattr -cr /Applications/CC\ Remote\ Seamless.app
+```
+
+Then open the app normally.
+
+### Windows
+
+Run the `.exe` installer directly. No extra steps needed.
+
 ## Quick Start
 
 ### Prerequisites

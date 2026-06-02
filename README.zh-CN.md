@@ -37,6 +37,24 @@
 - **自动 Hook 安装** — 启动时自动配置 Claude Code hooks
 - **无需公网 IP** — 飞书 WebSocket + Telegram long polling，客户端主动发起连接
 
+## 安装
+
+从 [GitHub Releases](https://github.com/Oak-Thorn/cc_remote_seamless/releases) 下载最新版本。
+
+### macOS
+
+挂载 DMG 并将应用拖入 Applications 后，macOS Gatekeeper 可能会提示应用"已损坏"，这是因为应用未经 Apple 签名。执行以下命令解除限制：
+
+```bash
+xattr -cr /Applications/CC\ Remote\ Seamless.app
+```
+
+然后正常打开应用即可。
+
+### Windows
+
+直接运行 `.exe` 安装包，无需额外操作。
+
 ## 快速开始
 
 ### 前置要求
