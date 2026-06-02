@@ -18,7 +18,7 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-    "resources": ["resources/sounds/*"],
+    "resources": ["resources/sounds/*", "resources/icons/*"],
     "externalBin": ["../sidecar/feishu-gateway/feishu-gateway"]
   },
   "app": {
