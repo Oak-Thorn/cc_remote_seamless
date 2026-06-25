@@ -20,6 +20,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const permissionSound = ref<string>(
     localStorage.getItem("permissionSound") || "Hero"
   );
+  const logToFile = ref<boolean>(localStorage.getItem("logToFile") === "true");
   const availableSounds = ref<SoundInfo[]>([]);
   const soundsLoaded = ref(false);
 
@@ -64,10 +65,21 @@ export const useSettingsStore = defineStore("settings", () => {
     await loadAvailableSounds();
   }
 
+  function setLogToFile(enabled: boolean) {
+    logToFile.value = enabled;
+    localStorage.setItem("logToFile", String(enabled));
+    invoke("set_log_to_file", { enabled }).catch(() => {});
+  }
+
+  function syncLogToFile() {
+    invoke("set_log_to_file", { enabled: logToFile.value }).catch(() => {});
+  }
+
   return {
     floatingIcon, setFloatingIcon,
     idleSound, setIdleSound,
     permissionSound, setPermissionSound,
+    logToFile, setLogToFile, syncLogToFile,
     availableSounds, soundsLoaded, loadAvailableSounds, reloadSounds,
   };
 });

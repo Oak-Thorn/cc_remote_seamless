@@ -5,6 +5,7 @@ pub mod hook;
 pub mod pty;
 pub mod window;
 pub mod config;
+pub mod logging;
 mod commands;
 
 use agent::claude_code::ClaudeCodeConnector;
@@ -23,7 +24,16 @@ use tauri::{Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
 
 pub fn run() {
-    tracing_subscriber::fmt::init();
+    let log_dir = logging::log_dir();
+    let _ = std::fs::create_dir_all(&log_dir);
+    logging::init(false, log_dir);
+    logging::cleanup_old_logs(logging::RETAIN_DAYS);
+
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!("PANIC: {}", info);
+        eprintln!("{}", info);
+    }));
+
     engine::init_start_time();
 
     let app_config = config::load();
@@ -403,6 +413,9 @@ pub fn run() {
             commands::pin_session,
             commands::get_active_session,
             commands::get_config_path,
+            commands::get_log_dir,
+            commands::open_log_dir,
+            commands::set_log_to_file,
             commands::get_home_dir,
             commands::open_config_dir,
             commands::read_config_file,

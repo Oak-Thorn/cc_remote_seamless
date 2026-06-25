@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
+import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore, type FloatingIcon, type SoundInfo } from "../settings";
 
 // Mock Tauri invoke
@@ -47,6 +48,34 @@ describe("useSettingsStore", () => {
       const store = useSettingsStore();
       expect(store.availableSounds).toEqual([]);
       expect(store.soundsLoaded).toBe(false);
+    });
+
+    it("has logToFile default false", () => {
+      const store = useSettingsStore();
+      expect(store.logToFile).toBe(false);
+    });
+  });
+
+  describe("setLogToFile", () => {
+    it("updates the ref and persists to localStorage", () => {
+      const store = useSettingsStore();
+      store.setLogToFile(true);
+      expect(store.logToFile).toBe(true);
+      expect(localStorage.getItem("logToFile")).toBe("true");
+    });
+
+    it("invokes backend with enabled flag", () => {
+      const store = useSettingsStore();
+      vi.mocked(invoke).mockClear();
+      store.setLogToFile(true);
+      expect(invoke).toHaveBeenCalledWith("set_log_to_file", { enabled: true });
+    });
+
+    it("restores logToFile from localStorage on new store creation", () => {
+      localStorage.setItem("logToFile", "true");
+      setActivePinia(createPinia());
+      const store = useSettingsStore();
+      expect(store.logToFile).toBe(true);
     });
   });
 

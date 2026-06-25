@@ -173,6 +173,40 @@ pub async fn read_config_file() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn get_log_dir() -> Result<String, String> {
+    Ok(crate::logging::log_dir().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn open_log_dir() -> Result<(), String> {
+    let dir = crate::logging::log_dir();
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(dir.to_string_lossy().to_string())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(dir.to_string_lossy().to_string())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_log_to_file(enabled: bool) -> Result<(), String> {
+    crate::logging::set_enabled(enabled);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn start_feishu_register(app: AppHandle) -> Result<(), String> {
     let script = app.path().resource_dir()
         .map(|d| d.join("../../scripts/feishu-register.mjs"))

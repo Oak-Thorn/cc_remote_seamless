@@ -8,9 +8,10 @@ import { emit, listen } from "@tauri-apps/api/event";
 import QRCode from "qrcode";
 
 const settings = useSettingsStore();
-const activeTab = ref<"icon" | "sound" | "config" | "about">("icon");
+const activeTab = ref<"icon" | "sound" | "config" | "logs" | "about">("icon");
 const configPath = ref("");
 const configContent = ref("");
+const logDir = ref("");
 const qrDataUrl = ref("");
 const qrStatus = ref<"idle" | "loading" | "waiting" | "done" | "error">("idle");
 const qrError = ref("");
@@ -42,6 +43,9 @@ onMounted(async () => {
   const home = await invoke<string>("get_home_dir").catch(() => "");
   configPath.value = home && raw.startsWith(home) ? "~" + raw.slice(home.length) : raw;
   configContent.value = await invoke<string>("read_config_file").catch(() => "");
+  const rawLogDir = await invoke<string>("get_log_dir").catch(() => "~/.cc-remote/logs");
+  logDir.value = home && rawLogDir.startsWith(home) ? "~" + rawLogDir.slice(home.length) : rawLogDir;
+  settings.syncLogToFile();
   await settings.loadAvailableSounds();
   await reloadIcons();
 });
@@ -78,6 +82,10 @@ async function startFeishuRegister() {
 
 function openConfigDir() {
   invoke("open_config_dir").catch((e) => console.warn("open_config_dir failed:", e));
+}
+
+function openLogDir() {
+  invoke("open_log_dir").catch((e) => console.warn("open_log_dir failed:", e));
 }
 
 function previewSound(soundName: string) {
@@ -121,6 +129,7 @@ async function reloadSounds() {
         <div class="nav-item" :class="{ active: activeTab === 'icon' }" @click="activeTab = 'icon'">Floating Icon</div>
         <div class="nav-item" :class="{ active: activeTab === 'sound' }" @click="activeTab = 'sound'">Sound</div>
         <div class="nav-item" :class="{ active: activeTab === 'config' }" @click="activeTab = 'config'">Config</div>
+        <div class="nav-item" :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'">Logs</div>
         <div class="nav-item" :class="{ active: activeTab === 'about' }" @click="activeTab = 'about'">About</div>
       </nav>
       <main class="content">
@@ -287,6 +296,26 @@ chat_id = "&lt;your_chat_id&gt;"</pre>
           </div>
           <textarea class="config-viewer" readonly :value="configContent || '(file not found or empty)'" />
         </div>
+        <!-- Logs -->
+        <div v-else-if="activeTab === 'logs'" class="panel">
+          <h3>Logs</h3>
+          <div class="config-header">
+            <code class="config-path-text">{{ logDir }}</code>
+            <button class="open-dir-btn" @click="openLogDir">Open</button>
+          </div>
+          <div class="log-toggle-row">
+            <span class="log-toggle-label">保存日志到文件</span>
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="settings.logToFile"
+                @change="settings.setLogToFile(($event.target as HTMLInputElement).checked)"
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p class="log-hint">开启后,运行日志与崩溃信息将按天保存到上述目录(保留最近 7 天)。</p>
+        </div>
         <!-- About -->
         <div v-else-if="activeTab === 'about'" class="panel">
           <h3>About</h3>
@@ -363,4 +392,13 @@ chat_id = "&lt;your_chat_id&gt;"</pre>
 .step-link { color: #3b82f6; text-decoration: none; }
 .step-link:hover { text-decoration: underline; }
 .step-code { font-family: monospace; font-size: 11px; color: #334155; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px 10px; margin: 6px 0 0 0; white-space: pre; line-height: 1.6; }
+.log-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 10px; }
+.log-toggle-label { font-size: 12px; font-weight: 600; color: #374151; }
+.log-hint { font-size: 11px; color: #64748b; margin: 0; line-height: 1.5; }
+.toggle { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; cursor: pointer; inset: 0; background: #cbd5e1; border-radius: 22px; transition: background 0.2s; }
+.toggle-slider::before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: transform 0.2s; }
+.toggle input:checked + .toggle-slider { background: #3b82f6; }
+.toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
 </style>
