@@ -2,7 +2,7 @@
 
 ## Settings Page
 
-Right-click the floating icon or use the system tray menu to open Settings. The settings page has four tabs:
+Right-click the floating icon or use the system tray menu to open Settings. The settings page has five tabs:
 
 ### Floating Icon
 
@@ -26,9 +26,9 @@ Configure notification sounds for two events:
 
 Custom sounds: place audio files in `~/.cc-remote/sounds/`, then click **Load** to refresh.
 
-### Config
+### IMConfig
 
-The config tab provides guided setup for Feishu and Telegram platforms.
+The IMConfig tab provides guided setup for Feishu and Telegram platforms.
 
 Config file location: `~/.cc-remote/config.toml`
 
@@ -66,7 +66,7 @@ platforms = ["feishu-main"]
 
 #### Feishu Setup
 
-1. **Create App** — In the Settings > Config tab, click "Scan to Create" and scan the QR code with Feishu. This auto-creates a bot app and saves `app_id` / `app_secret` to your config.
+1. **Create App** — In the Settings > IMConfig tab, click "Scan to Create" and scan the QR code with Feishu. This auto-creates a bot app and saves `app_id` / `app_secret` to your config.
 2. **Get chat_id** — From the Feishu App's agent settings page, copy the `chat_id` (format: `oc_xxxx`).
 3. **Edit Config** — Fill in the `chat_id` field in `~/.cc-remote/config.toml`.
 
@@ -75,6 +75,17 @@ platforms = ["feishu-main"]
 1. **Create Bot** — Send `/newbot` to [@BotFather](https://t.me/BotFather) on Telegram, follow the prompts, and copy the `bot_token`.
 2. **Get chat_id** — Send any message to your bot, then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` and find `chat.id` in the response.
 3. **Edit Config** — Add the `[platforms.telegram]` section with `bot_token` and `chat_id`.
+
+### Logs
+
+Used for diagnosing "no response" or "crash" issues.
+
+- **Log directory** — `~/.cc-remote/logs/`. Click **Open** to reveal it.
+- **Save logs to file** — toggle, **off by default**, takes effect **immediately** (no restart).
+- When enabled, runtime logs and Rust panic info are written daily to `cc-remote.<YYYY-MM-DD>.log`.
+- Files older than **7 days** are cleaned up automatically at app startup.
+
+> Console (stdout) output is always kept; the toggle only controls whether logs are *also* written to file. When hitting an intermittent issue, enable the toggle, reproduce, then collect the log file.
 
 ### About
 
