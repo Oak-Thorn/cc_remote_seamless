@@ -2,12 +2,20 @@ use crate::agent::{AgentConnector, AgentEvent, EventSender, SessionInfo, Session
 use crate::hook::server::HookEvent;
 use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
+use std::time::Instant;
 use tracing::info;
+
+/// Within this window after a hook event, the live hook stream is authoritative
+/// and file-based reconciliation must NOT override the in-memory state. The CC
+/// session file's `status` lags real state, so an unguarded reconcile flips an
+/// actively-busy session to Idle between tool calls.
+const RECONCILE_HOOK_GUARD_SECS: u64 = 5;
 
 struct PtyConnection {
     session_id: String,
     state: SessionState,
     working_dir: Option<String>,
+    last_event: Instant,
 }
 
 pub struct ClaudeCodeConnector {
@@ -54,9 +62,17 @@ impl ClaudeCodeConnector {
                             tracing::info!("Session file: {} pid={} alive={} id={}", path.display(), pid, alive, session_id);
                             if alive && !session_id.is_empty() {
                                 let cwd = info.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
-                                let state = match info.get("status").and_then(|v| v.as_str()) {
+                                let raw_status = info.get("status").and_then(|v| v.as_str());
+                                let state = match raw_status {
                                     Some("busy") => SessionState::Busy,
-                                    _ => SessionState::Idle,
+                                    Some("idle") => SessionState::Idle,
+                                    other => {
+                                        tracing::warn!(
+                                            "Session {} has unexpected status {:?}, defaulting to Idle on initial discovery",
+                                            session_id, other
+                                        );
+                                        SessionState::Idle
+                                    }
                                 };
                                 info!("Discovered existing CC session: {} (pid={}, cwd={:?})", session_id, pid, cwd);
                                 self.update_state(&session_id, state, cwd);
@@ -129,6 +145,10 @@ impl ClaudeCodeConnector {
     }
 
     fn update_state(&self, session_id: &str, state: SessionState, cwd: Option<String>) {
+        self.update_state_from(session_id, state, cwd, "hook");
+    }
+
+    fn update_state_from(&self, session_id: &str, state: SessionState, cwd: Option<String>, source: &str) {
         let mut sessions = self.sessions.write().unwrap();
         let prev_state = sessions.get(session_id).map(|c| c.state.clone());
         if let Some(conn) = sessions.get_mut(session_id) {
@@ -136,16 +156,22 @@ impl ClaudeCodeConnector {
                 conn.working_dir = cwd;
             }
             conn.state = state.clone();
+            conn.last_event = Instant::now();
         } else {
             sessions.insert(session_id.to_string(), PtyConnection {
                 session_id: session_id.to_string(),
                 state: state.clone(),
                 working_dir: cwd,
+                last_event: Instant::now(),
             });
         }
         drop(sessions);
 
         if prev_state.as_ref() != Some(&state) {
+            info!(
+                "CC state transition: session={} {:?} -> {:?} (source={})",
+                session_id, prev_state, state, source
+            );
             self.emit(AgentEvent::StateChange {
                 session_id: session_id.to_string(),
                 state,
@@ -199,24 +225,45 @@ impl ClaudeCodeConnector {
                         continue;
                     }
 
-                    let file_state = match info.get("status").and_then(|v| v.as_str()) {
-                        Some("busy") => SessionState::Busy,
-                        _ => SessionState::Idle,
+                    let raw_status = info.get("status").and_then(|v| v.as_str());
+                    let file_state = match raw_status {
+                        Some("busy") => Some(SessionState::Busy),
+                        Some("idle") => Some(SessionState::Idle),
+                        other => {
+                            tracing::warn!(
+                                "Reconcile: session {} has unexpected status {:?}, skipping override",
+                                session_id, other
+                            );
+                            None
+                        }
                     };
+                    let Some(file_state) = file_state else { continue };
 
                     let sessions = self.sessions.read().unwrap();
                     if let Some(conn) = sessions.get(&session_id) {
                         if conn.state == SessionState::Busy && file_state == SessionState::Idle {
+                            let age = conn.last_event.elapsed();
+                            if age.as_secs() < RECONCILE_HOOK_GUARD_SECS {
+                                drop(sessions);
+                                tracing::info!(
+                                    "Reconcile: session {} file says idle but last hook event was {:?} ago (< {}s guard), keeping Busy",
+                                    session_id, age, RECONCILE_HOOK_GUARD_SECS
+                                );
+                                continue;
+                            }
                             drop(sessions);
-                            tracing::info!("Reconcile: session {} was Busy but file says idle, updating", session_id);
+                            tracing::info!(
+                                "Reconcile: session {} was Busy but file says idle (last hook {:?} ago), updating to Idle",
+                                session_id, age
+                            );
                             let cwd = info.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            self.update_state(&session_id, SessionState::Idle, cwd);
+                            self.update_state_from(&session_id, SessionState::Idle, cwd, "reconcile");
                         }
                     } else {
                         drop(sessions);
                         let cwd = info.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        tracing::info!("Reconcile: discovered new session {} (pid={})", session_id, pid);
-                        self.update_state(&session_id, file_state, cwd);
+                        tracing::info!("Reconcile: discovered new session {} (pid={}, status={:?})", session_id, pid, raw_status);
+                        self.update_state_from(&session_id, file_state, cwd, "reconcile-discover");
                     }
                 }
             }
