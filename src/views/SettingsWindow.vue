@@ -8,7 +8,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import QRCode from "qrcode";
 
 const settings = useSettingsStore();
-const activeTab = ref<"icon" | "sound" | "config" | "logs" | "about">("icon");
+const activeTab = ref<"icon" | "sound" | "imconfig" | "logs" | "about">("icon");
 const configPath = ref("");
 const configContent = ref("");
 const logDir = ref("");
@@ -128,7 +128,7 @@ async function reloadSounds() {
       <nav class="sidebar">
         <div class="nav-item" :class="{ active: activeTab === 'icon' }" @click="activeTab = 'icon'">Floating Icon</div>
         <div class="nav-item" :class="{ active: activeTab === 'sound' }" @click="activeTab = 'sound'">Sound</div>
-        <div class="nav-item" :class="{ active: activeTab === 'config' }" @click="activeTab = 'config'">Config</div>
+        <div class="nav-item" :class="{ active: activeTab === 'imconfig' }" @click="activeTab = 'imconfig'">IMConfig</div>
         <div class="nav-item" :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'">Logs</div>
         <div class="nav-item" :class="{ active: activeTab === 'about' }" @click="activeTab = 'about'">About</div>
       </nav>
@@ -208,7 +208,7 @@ async function reloadSounds() {
           </div>
         </div>
         <!-- Config File -->
-        <div v-else-if="activeTab === 'config'" class="panel">
+        <div v-else-if="activeTab === 'imconfig'" class="panel">
           <h3>Config Feishu</h3>
           <div class="setup-steps">
             <div class="step-item">
