@@ -135,16 +135,12 @@ async fn resolve_permission(
     let key = map.keys().find(|k| k.starts_with(&session_prefix)).cloned();
     if let Some(request_id) = key {
         if let Some(entry) = map.remove(&request_id) {
-            let (behavior, updated_permissions) = if action == "allowAlways" {
-                ("allow".to_string(), Some(entry.suggestions))
-            } else {
-                (action.to_string(), None)
+            let response = match action {
+                "deny" => PermissionResponse::deny("Denied by user"),
+                "allowAlways" => PermissionResponse::allow_with(None, Some(entry.suggestions)),
+                _ => PermissionResponse::allow(),
             };
-            let _ = entry.sender.send(PermissionResponse {
-                behavior,
-                message: None,
-                updated_permissions,
-            });
+            let _ = entry.sender.send(response);
             return SlashResult::Reply(format!("Permission: {}", action));
         }
     }
@@ -185,7 +181,9 @@ const HELP_TEXT: &str = "\
 /stop - Stop current session task
 /radar - Rediscover running agents
 /answer 1 - Single select option 1
-/answer 1 3 - Multi select options 1 and 3";
+/answer 1 3 - Multi select options 1 and 3
+/answer Q2 1 - Answer question 2 in a multi-question prompt
+/answer N <text> - Other / custom answer";
 
 async fn radar(agents: &HashMap<String, Arc<dyn AgentConnector>>) -> SlashResult {
     for agent in agents.values() {
@@ -434,6 +432,75 @@ mod tests {
         let results = search_skills_in(claude_home, "kubernetes");
         assert!(results.is_empty());
     }
+
+    fn question_input() -> serde_json::Value {
+        serde_json::json!({
+            "questions": [{
+                "header": "方向",
+                "question": "选哪个方向?",
+                "multiSelect": false,
+                "options": [
+                    {"label": "补序列图", "description": "d1"},
+                    {"label": "补测试章节", "description": "d2"},
+                    {"label": "校对与纠错", "description": "d3"}
+                ]
+            }]
+        })
+    }
+
+    fn q0() -> serde_json::Value {
+        question_input()["questions"][0].clone()
+    }
+
+    #[test]
+    fn answer_single_index_maps_to_label() {
+        let (q, v) = answer_for_question(&q0(), "3", false).unwrap();
+        assert_eq!(q, "选哪个方向?");
+        assert_eq!(v, "校对与纠错");
+    }
+
+    #[test]
+    fn answer_multi_index_joins_labels() {
+        let (_, v) = answer_for_question(&q0(), "1 2", false).unwrap();
+        assert_eq!(v, "补序列图, 补测试章节");
+    }
+
+    #[test]
+    fn answer_custom_text_strips_index_marker() {
+        // "/answer 4 自定义内容" → is_custom, value is just the free text
+        let (_, v) = answer_for_question(&q0(), "4 自定义内容", true).unwrap();
+        assert_eq!(v, "自定义内容");
+    }
+
+    #[test]
+    fn answer_out_of_range_index_falls_back_to_text() {
+        let (_, v) = answer_for_question(&q0(), "9", false).unwrap();
+        assert_eq!(v, "9");
+    }
+
+    #[test]
+    fn answer_non_question_returns_none() {
+        let input = serde_json::json!({ "command": "ls" });
+        assert!(answer_for_question(&input, "1", false).is_none());
+    }
+
+    #[test]
+    fn parse_target_detects_qn_prefix() {
+        assert_eq!(parse_question_target("Q2 1 3"), (Some(1), "1 3"));
+        assert_eq!(parse_question_target("q4 2"), (Some(3), "2"));
+    }
+
+    #[test]
+    fn parse_target_absent_returns_none() {
+        assert_eq!(parse_question_target("1 3"), (None, "1 3"));
+        assert_eq!(parse_question_target("3 自定义"), (None, "3 自定义"));
+    }
+
+    #[test]
+    fn parse_target_q0_is_not_a_valid_target() {
+        // Q0 has no question 0 (1-based), so it's treated as plain text.
+        assert_eq!(parse_question_target("Q0 1"), (None, "Q0 1"));
+    }
 }
 
 async fn clear_input(chat_id: &str, bindings: &Arc<BindingStore>, agents: &HashMap<String, Arc<dyn AgentConnector>>) -> SlashResult {
@@ -496,7 +563,10 @@ async fn change_agent(args: &str, chat_id: &str, bindings: &Arc<BindingStore>, a
     }
 }
 
-/// `/answer 1` or `/answer 1 3` (multi) or `/answer 3 自定义文本` (Other)
+/// `/answer 1` / `/answer 1 3` / `/answer 3 文本` answers the first question.
+/// `/answer Q2 1` / `/answer Q4 1 2` answers a specific question in a
+/// multi-question prompt; answers accumulate until every question is filled,
+/// then the response is sent to Claude Code.
 async fn answer_question(
     args: &str,
     chat_id: &str,
@@ -504,30 +574,34 @@ async fn answer_question(
     waiters: &PermissionWaiters,
 ) -> SlashResult {
     if args.is_empty() {
-        return SlashResult::Reply("Usage: /answer 1 or /answer 1 3 or /answer N <text>".to_string());
+        return SlashResult::Reply(ANSWER_USAGE.to_string());
     }
 
-    let parts: Vec<&str> = args.splitn(2, ' ').collect();
-    let first = parts[0].trim();
-    if first.parse::<u32>().is_err() {
-        return SlashResult::Reply("Usage: /answer N or /answer N <text>".to_string());
+    // Detect a leading QN target (case-insensitive): "/answer Q2 1 3".
+    let trimmed = args.trim();
+    let (target_idx, rest) = parse_question_target(trimmed);
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return SlashResult::Reply(ANSWER_USAGE.to_string());
     }
 
-    let (answer_text, is_custom) = if parts.len() == 2 {
-        let rest = parts[1].trim();
-        let tokens: Vec<&str> = rest.split(|c: char| c == ',' || c == ' ')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if tokens.iter().all(|t| t.parse::<u32>().is_ok()) {
-            let mut all = vec![first];
-            all.extend(tokens);
-            (all.join(" "), false)
-        } else {
-            (format!("{} {}", first, rest), true)
-        }
+    let first_tok = rest.split_whitespace().next().unwrap_or("");
+    if first_tok.parse::<u32>().is_err() {
+        return SlashResult::Reply(ANSWER_USAGE.to_string());
+    }
+
+    // Split the remainder into "all numeric indices" (single/multi select) vs
+    // "first token + free text" (Other).
+    let toks: Vec<&str> = rest.split(|c: char| c == ',' || c == ' ')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let (answer_text, is_custom) = if toks.iter().all(|t| t.parse::<u32>().is_ok()) {
+        (toks.join(" "), false)
     } else {
-        (first.to_string(), false)
+        // Other: first token is index marker, the rest is verbatim text.
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        (rest.to_string(), parts.len() == 2)
     };
 
     let binding = match bindings.get(chat_id) {
@@ -536,18 +610,118 @@ async fn answer_question(
     };
     let session_prefix = format!("{}:", binding.session_id);
     let mut map = waiters.lock().await;
-    let key = map.keys().find(|k| k.starts_with(&session_prefix)).cloned();
-    if let Some(request_id) = key {
-        if let Some(entry) = map.remove(&request_id) {
-            let _ = entry.sender.send(PermissionResponse {
-                behavior: "allow".to_string(),
-                message: Some(answer_text.clone()),
-                updated_permissions: None,
-            });
-            let display = if is_custom { format!("Answered: {} (custom)", answer_text) } else { format!("Answered: {}", answer_text) };
-            return SlashResult::Reply(display);
+    let key = match map.keys().find(|k| k.starts_with(&session_prefix)).cloned() {
+        Some(k) => k,
+        None => {
+            drop(map);
+            return SlashResult::Inject(answer_text);
+        }
+    };
+
+    let entry = map.get_mut(&key).unwrap();
+    let questions = entry.input.get("questions").and_then(|v| v.as_array()).cloned();
+    let questions = match questions {
+        Some(q) if !q.is_empty() => q,
+        _ => {
+            // Not an AskUserQuestion — legacy passthrough to CC as a single allow.
+            let e = map.remove(&key).unwrap();
+            let _ = e.sender.send(PermissionResponse::allow_with(None, None));
+            drop(map);
+            return SlashResult::Reply(format!("Answered: {}", answer_text));
+        }
+    };
+
+    let q_idx = target_idx.unwrap_or(0);
+    if q_idx >= questions.len() {
+        return SlashResult::Reply(format!("无效问题号 Q{}，本提示共 {} 个问题", q_idx + 1, questions.len()));
+    }
+
+    let (question_text, value) = match answer_for_question(&questions[q_idx], &answer_text, is_custom) {
+        Some(pair) => pair,
+        None => return SlashResult::Reply("无法解析该问题，请改用桌面弹窗".to_string()),
+    };
+    entry.pending_answers.insert(question_text, value);
+
+    // Which questions are still unanswered?
+    let answered: std::collections::HashSet<&String> = entry.pending_answers.keys().collect();
+    let missing: Vec<usize> = questions.iter().enumerate()
+        .filter(|(_, q)| {
+            q.get("question").and_then(|v| v.as_str())
+                .map(|qt| !answered.contains(&qt.to_string()))
+                .unwrap_or(false)
+        })
+        .map(|(i, _)| i + 1)
+        .collect();
+
+    if missing.is_empty() {
+        // All answered — send to CC and clear the waiter.
+        let entry = map.remove(&key).unwrap();
+        let answers = serde_json::Value::Object(
+            entry.pending_answers.iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect(),
+        );
+        // updatedInput must satisfy AskUserQuestion's input schema, which
+        // requires the original `questions` array. Echo it back alongside the
+        // answers, otherwise CC rejects the override with a schema error.
+        let updated_input = serde_json::json!({
+            "questions": questions,
+            "answers": answers,
+        });
+        let _ = entry.sender.send(PermissionResponse::allow_with(Some(updated_input.clone()), None));
+        drop(map);
+        SlashResult::Reply(format!("Answered: {}", updated_input.get("answers").unwrap()))
+    } else {
+        let progress = format!(
+            "已记录 Q{}。还需回答：{}（用 /answer Q<号> <选项> 继续）",
+            q_idx + 1,
+            missing.iter().map(|n| format!("Q{}", n)).collect::<Vec<_>>().join(" "),
+        );
+        drop(map);
+        SlashResult::Reply(progress)
+    }
+}
+
+const ANSWER_USAGE: &str = "用法: /answer N（单选）, /answer N M（多选）, /answer N 文本（Other）; 多问题用 /answer Q2 1";
+
+/// Parse an optional leading "QN" / "qN" target. Returns (Some(0-based idx), remainder)
+/// or (None, original) when no target prefix is present.
+fn parse_question_target(s: &str) -> (Option<usize>, &str) {
+    let mut it = s.splitn(2, char::is_whitespace);
+    let head = it.next().unwrap_or("");
+    if (head.starts_with('Q') || head.starts_with('q')) && head.len() > 1 {
+        if let Ok(n) = head[1..].parse::<usize>() {
+            if n >= 1 {
+                return (Some(n - 1), it.next().unwrap_or(""));
+            }
         }
     }
-    drop(map);
-    SlashResult::Inject(answer_text)
+    (None, s)
+}
+
+/// Resolve one question's answer: map numeric indices to option labels (multi
+/// joined with ", "), or use custom text verbatim. Returns (question_text, value).
+fn answer_for_question(q: &serde_json::Value, answer_text: &str, is_custom: bool) -> Option<(String, String)> {
+    let question = q.get("question").and_then(|v| v.as_str())?;
+    let options = q.get("options").and_then(|v| v.as_array());
+
+    let value = if is_custom {
+        // Drop the leading index marker, keep the free text.
+        answer_text.splitn(2, ' ').nth(1).unwrap_or(answer_text).trim().to_string()
+    } else {
+        let labels: Vec<String> = answer_text
+            .split_whitespace()
+            .filter_map(|t| t.parse::<usize>().ok())
+            .filter_map(|idx| {
+                options
+                    .and_then(|opts| opts.get(idx.checked_sub(1)?))
+                    .and_then(|o| o.get("label"))
+                    .and_then(|l| l.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        if labels.is_empty() { answer_text.to_string() } else { labels.join(", ") }
+    };
+
+    Some((question.to_string(), value))
 }

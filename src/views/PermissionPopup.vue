@@ -10,6 +10,12 @@ const rawInput = ref(decodeURIComponent(params.get("input") || ""));
 const sessionId = ref(decodeURIComponent(params.get("session") || ""));
 const requestId = ref(decodeURIComponent(params.get("request_id") || ""));
 const selectedBehavior = ref("allow");
+const submitError = ref("");
+
+// Forward logs to the Rust side so they survive the popup window closing.
+function backendLog(level: "info" | "warn" | "error", message: string) {
+  invoke("frontend_log", { level, message }).catch(() => {});
+}
 
 interface QuestionOption {
   label: string;
@@ -118,12 +124,20 @@ const toolColor = computed(() => {
   return "#2563eb";
 });
 
-async function respond(behavior: string, message?: string) {
+async function respond(behavior: string, message?: string, updatedInput?: Record<string, unknown>) {
+  backendLog("info", `popup respond: behavior=${behavior} requestId=${requestId.value} updatedInput=${JSON.stringify(updatedInput ?? null)}`);
   try {
-    console.log("respond_permission:", { requestId: requestId.value, behavior, message });
-    await invoke("respond_permission", { requestId: requestId.value, behavior, message: message || null });
+    await invoke("respond_permission", {
+      requestId: requestId.value,
+      behavior,
+      message: message || null,
+      updatedInput: updatedInput || null,
+    });
   } catch (e) {
-    console.error("respond_permission failed:", e);
+    // Keep the window open and surface the error instead of silently closing.
+    submitError.value = String(e);
+    backendLog("error", `popup respond_permission failed: ${String(e)}`);
+    return;
   }
   const win = getCurrentWebviewWindow();
   await win.close();
@@ -134,21 +148,25 @@ function submitPermission() {
 }
 
 function submitAnswer() {
-  const answers: Record<string, string | string[]> = {};
-  for (let i = 0; i < parsedQuestions.value.length; i++) {
-    const q = parsedQuestions.value[i];
-    if (q.multiSelect) {
-      answers[q.question] = Array.from(multiAnswers[i] || []);
-    } else {
-      const sel = singleAnswers[i];
-      if (sel === "__other__") {
-        answers[q.question] = otherTexts[i] || "";
+  try {
+    const answers: Record<string, string> = {};
+    for (let i = 0; i < parsedQuestions.value.length; i++) {
+      const q = parsedQuestions.value[i];
+      if (q.multiSelect) {
+        answers[q.question] = Array.from(multiAnswers[i] || []).join(", ");
       } else {
-        answers[q.question] = sel || "";
+        const sel = singleAnswers[i];
+        answers[q.question] = sel === "__other__" ? otherTexts[i] || "" : sel || "";
       }
     }
+    backendLog("info", `popup submitAnswer built answers: ${JSON.stringify(answers)}`);
+    // updatedInput must satisfy AskUserQuestion's input schema, which requires
+    // the original `questions` array; CC rejects the override otherwise.
+    respond("allow", undefined, { questions: parsedQuestions.value, answers });
+  } catch (e) {
+    submitError.value = String(e);
+    backendLog("error", `popup submitAnswer threw: ${String(e)}`);
   }
-  respond("allow", JSON.stringify(answers));
 }
 
 async function closeWindow() {
@@ -222,7 +240,8 @@ async function openSettings() {
             </label>
           </div>
         </div>
-        <button class="btn submit" @click="submitAnswer">Submit</button>
+        <div v-if="submitError" class="submit-error">提交失败：{{ submitError }}</div>
+        <button class="btn submit sticky-submit" @click="submitAnswer">Submit</button>
       </template>
 
       <!-- Permission mode -->
@@ -448,4 +467,19 @@ async function openSettings() {
 .btn:hover { opacity: 0.85; }
 .btn:active { transform: scale(0.97); }
 .btn.submit { background: #3b82f6; color: #fff; }
+.sticky-submit {
+  position: sticky;
+  bottom: 0;
+  margin-top: 4px;
+  box-shadow: 0 -6px 12px -8px rgba(0, 0, 0, 0.25);
+}
+.submit-error {
+  font-size: 11px;
+  color: #ef4444;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 6px 8px;
+  word-break: break-all;
+}
 </style>

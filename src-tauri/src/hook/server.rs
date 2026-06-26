@@ -50,14 +50,39 @@ pub enum HookEvent {
     PiPostCompact { session_id: String, cwd: Option<String> },
 }
 
+/// Mirrors Claude Code's PermissionRequest `decision` zod union:
+/// allow → { behavior:"allow", updatedInput?, updatedPermissions? }
+/// deny  → { behavior:"deny", message?, interrupt? }
+/// Serializes with `behavior` as the discriminant so it matches CC exactly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionResponse {
-    pub behavior: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "updatedPermissions")]
-    pub updated_permissions: Option<Vec<serde_json::Value>>,
+#[serde(tag = "behavior", rename_all = "lowercase")]
+pub enum PermissionResponse {
+    Allow {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "updatedInput")]
+        updated_input: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "updatedPermissions")]
+        updated_permissions: Option<Vec<serde_json::Value>>,
+    },
+    Deny {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        interrupt: Option<bool>,
+    },
+}
+
+impl PermissionResponse {
+    pub fn allow() -> Self {
+        PermissionResponse::Allow { updated_input: None, updated_permissions: None }
+    }
+    pub fn allow_with(updated_input: Option<serde_json::Value>, updated_permissions: Option<Vec<serde_json::Value>>) -> Self {
+        PermissionResponse::Allow { updated_input, updated_permissions }
+    }
+    pub fn deny(message: impl Into<String>) -> Self {
+        PermissionResponse::Deny { message: Some(message.into()), interrupt: None }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +104,10 @@ pub type PermissionWaiters = Arc<Mutex<HashMap<String, PermissionWaiterEntry>>>;
 pub struct PermissionWaiterEntry {
     pub sender: oneshot::Sender<PermissionResponse>,
     pub suggestions: Vec<serde_json::Value>,
+    pub input: serde_json::Value,
+    /// Accumulated AskUserQuestion answers keyed by question text, filled
+    /// incrementally by `/answer QN ...` until every question is answered.
+    pub pending_answers: HashMap<String, String>,
 }
 
 struct HookState {
@@ -293,8 +322,10 @@ async fn handle_elicitation(
         .map(|v| v.to_string()).unwrap_or_default();
     let request_id = format!("eli:{}:{}", session_id, uuid::Uuid::new_v4());
 
+    let tool_input = raw.get("tool_input").or_else(|| raw.get("toolInput"))
+        .cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
-    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![] });
+    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![], input: tool_input, pending_answers: HashMap::new() });
 
     let _ = state.tx.send(HookEvent::Elicitation { session_id: session_id.clone(), tool: tool.clone(), input, cwd, request_id: request_id.clone() });
 
@@ -304,7 +335,7 @@ async fn handle_elicitation(
         Ok(Ok(response)) => response,
         _ => {
             state.permission_waiters.lock().await.remove(&request_id);
-            PermissionResponse { behavior: "deny".to_string(), message: Some("Timeout".to_string()), updated_permissions: None }
+            PermissionResponse::deny("Timeout")
         }
     };
     Json(PermissionHookOutput {
@@ -357,8 +388,10 @@ async fn handle_permission(
         .unwrap_or_default();
     let request_id = format!("{}:{}", session_id, uuid::Uuid::new_v4());
 
+    let tool_input = raw.get("tool_input").or_else(|| raw.get("toolInput"))
+        .cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
-    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions });
+    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions, input: tool_input, pending_answers: HashMap::new() });
 
     let _ = state.tx.send(HookEvent::PermissionRequest {
         session_id,
@@ -374,7 +407,7 @@ async fn handle_permission(
         Ok(Ok(response)) => response,
         _ => {
             state.permission_waiters.lock().await.remove(&request_id);
-            PermissionResponse { behavior: "deny".to_string(), message: Some("Timeout".to_string()), updated_permissions: None }
+            PermissionResponse::deny("Timeout")
         }
     };
     Json(PermissionHookOutput {
@@ -458,8 +491,9 @@ async fn handle_pi_permission(
     let cwd = raw.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
     let request_id = format!("pi:{}:{}", session_id, uuid::Uuid::new_v4());
 
+    let tool_input = raw.get("tool_input").cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
-    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![] });
+    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![], input: tool_input, pending_answers: HashMap::new() });
 
     let _ = state.tx.send(HookEvent::PiPermissionRequest {
         session_id,
@@ -473,7 +507,7 @@ async fn handle_pi_permission(
         Ok(Ok(response)) => response,
         _ => {
             state.permission_waiters.lock().await.remove(&request_id);
-            PermissionResponse { behavior: "deny".to_string(), message: Some("Timeout".to_string()), updated_permissions: None }
+            PermissionResponse::deny("Timeout")
         }
     };
     Json(decision)
@@ -573,5 +607,69 @@ mod tests {
             }
             _ => panic!("wrong event type"),
         }
+    }
+
+    // The decision wire format must match Claude Code's PermissionRequest zod union:
+    //   allow → { "behavior":"allow", updatedInput?, updatedPermissions? }
+    //   deny  → { "behavior":"deny", message?, interrupt? }
+
+    #[test]
+    fn allow_serializes_with_behavior_discriminant_only() {
+        let json = serde_json::to_value(PermissionResponse::allow()).unwrap();
+        assert_eq!(json, serde_json::json!({ "behavior": "allow" }));
+    }
+
+    #[test]
+    fn allow_with_updated_input_emits_answers() {
+        let resp = PermissionResponse::allow_with(
+            Some(serde_json::json!({ "answers": { "Q?": "A" } })),
+            None,
+        );
+        let json = serde_json::to_value(resp).unwrap();
+        assert_eq!(json, serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": { "answers": { "Q?": "A" } }
+        }));
+    }
+
+    #[test]
+    fn allow_always_emits_updated_permissions() {
+        let rules = vec![serde_json::json!({
+            "behavior": "allow",
+            "destination": "localSettings",
+            "rules": [{ "toolName": "Bash" }]
+        })];
+        let resp = PermissionResponse::allow_with(None, Some(rules.clone()));
+        let json = serde_json::to_value(resp).unwrap();
+        assert_eq!(json, serde_json::json!({
+            "behavior": "allow",
+            "updatedPermissions": rules
+        }));
+    }
+
+    #[test]
+    fn deny_serializes_with_message() {
+        let json = serde_json::to_value(PermissionResponse::deny("Denied by user")).unwrap();
+        assert_eq!(json, serde_json::json!({
+            "behavior": "deny",
+            "message": "Denied by user"
+        }));
+    }
+
+    #[test]
+    fn permission_hook_output_wraps_decision() {
+        let out = PermissionHookOutput {
+            hook_specific_output: PermissionDecisionWrapper {
+                hook_event_name: "PermissionRequest".to_string(),
+                decision: PermissionResponse::allow(),
+            },
+        };
+        let json = serde_json::to_value(out).unwrap();
+        assert_eq!(json, serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow" }
+            }
+        }));
     }
 }

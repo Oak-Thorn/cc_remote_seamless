@@ -64,13 +64,23 @@ pub async fn inject_input(
 }
 
 #[tauri::command]
+pub fn frontend_log(level: String, message: String) {
+    match level.as_str() {
+        "error" => tracing::error!(target: "frontend", "{}", message),
+        "warn" => tracing::warn!(target: "frontend", "{}", message),
+        _ => tracing::info!(target: "frontend", "{}", message),
+    }
+}
+
+#[tauri::command]
 pub async fn respond_permission(
     waiters: State<'_, PermissionWaiters>,
     request_id: String,
     behavior: String,
     message: Option<String>,
+    updated_input: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    tracing::info!("respond_permission called: request_id={}, behavior={}, message={:?}", request_id, behavior, message);
+    tracing::info!("respond_permission called: request_id={}, behavior={}, message={:?}, has_updated_input={}", request_id, behavior, message, updated_input.is_some());
     let mut waiters_map = waiters.lock().await;
     let keys: Vec<String> = waiters_map.keys().cloned().collect();
     tracing::info!("pending permission waiters: {:?}", keys);
@@ -78,22 +88,17 @@ pub async fn respond_permission(
     drop(waiters_map);
     match entry {
         Some(waiter_entry) => {
-            let resolved_behavior = if behavior == "deny" { "deny" } else { "allow" };
-            let updated_permissions = if behavior == "allowAlways" && !waiter_entry.suggestions.is_empty() {
-                Some(waiter_entry.suggestions)
+            let response = if behavior == "deny" {
+                PermissionResponse::deny("Denied by user")
             } else {
-                None
-            };
-            let response = PermissionResponse {
-                behavior: resolved_behavior.to_string(),
-                message: if resolved_behavior == "deny" {
-                    Some("Denied by user".to_string())
+                let updated_permissions = if behavior == "allowAlways" && !waiter_entry.suggestions.is_empty() {
+                    Some(waiter_entry.suggestions)
                 } else {
-                    message
-                },
-                updated_permissions,
+                    None
+                };
+                PermissionResponse::allow_with(updated_input, updated_permissions)
             };
-            tracing::info!("respond_permission: sending response behavior={} has_permissions={}", resolved_behavior, response.updated_permissions.is_some());
+            tracing::info!("respond_permission: sending {:?}", response);
             let _ = waiter_entry.sender.send(response);
             Ok(())
         }

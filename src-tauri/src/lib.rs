@@ -410,6 +410,7 @@ pub fn run() {
             commands::bind_session,
             commands::inject_input,
             commands::respond_permission,
+            commands::frontend_log,
             commands::pin_session,
             commands::get_active_session,
             commands::get_config_path,
@@ -444,17 +445,22 @@ fn build_permission_card(tool: &str, input: &str) -> serde_json::Value {
 
     match tool {
         "AskUserQuestion" => {
-            if let Some(questions) = obj.get("questions").and_then(|v| v.as_array()) {
-                for q in questions {
+            let questions = obj.get("questions").and_then(|v| v.as_array());
+            let multi_question = questions.map(|q| q.len() > 1).unwrap_or(false);
+            if let Some(questions) = questions {
+                for (qi, q) in questions.iter().enumerate() {
+                    // Prefix multi-question prompts with Q1./Q2. so the user
+                    // knows which question each option block belongs to.
+                    let q_prefix = if multi_question { format!("Q{} ", qi + 1) } else { String::new() };
                     if let Some(header) = q.get("header").and_then(|v| v.as_str()) {
-                        lines.push(format!("**{}**", header));
+                        lines.push(format!("**{}{}**", q_prefix, header));
                     }
                     if let Some(question) = q.get("question").and_then(|v| v.as_str()) {
                         lines.push(question.to_string());
                     }
                     let multi = q.get("multiSelect").and_then(|v| v.as_bool()).unwrap_or(false);
                     if multi {
-                        lines.push("(Multi-select)".to_string());
+                        lines.push("_(可多选)_".to_string());
                     }
                     if let Some(opts) = q.get("options").and_then(|v| v.as_array()) {
                         for (i, opt) in opts.iter().enumerate() {
@@ -462,7 +468,10 @@ fn build_permission_card(tool: &str, input: &str) -> serde_json::Value {
                             let desc = opt.get("description").and_then(|v| v.as_str()).unwrap_or("");
                             lines.push(format!("{}. **{}** - {}", i + 1, label, desc));
                         }
-                        lines.push(format!("{}. **Other** - Custom text input", opts.len() + 1));
+                        lines.push(format!("{}. **Other** - 自定义文本", opts.len() + 1));
+                    }
+                    if multi_question {
+                        lines.push(String::new());
                     }
                 }
             }
@@ -529,8 +538,18 @@ fn build_permission_card(tool: &str, input: &str) -> serde_json::Value {
     };
 
     let note = match tool {
-        "AskUserQuestion" => "Reply /answer N or /answer N <text> for Other",
-        _ => "Reply /allow or /deny | Desktop popup also available",
+        "AskUserQuestion" => {
+            let multi_question = obj.get("questions")
+                .and_then(|v| v.as_array())
+                .map(|q| q.len() > 1)
+                .unwrap_or(false);
+            if multi_question {
+                "多问题：用 /answer Q<号> <选项> 逐题回答（如 /answer Q1 2、/answer Q4 1 2 多选）。答齐所有问题后自动提交。也可用桌面弹窗".to_string()
+            } else {
+                "回复 /answer N（单选）、/answer N M（多选）、/answer N 文本（Other）".to_string()
+            }
+        }
+        _ => "Reply /allow or /deny | Desktop popup also available".to_string(),
     };
 
     let body = lines.join("\n");

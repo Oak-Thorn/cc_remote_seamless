@@ -35,9 +35,11 @@ pub fn show_permission_popup(
         url_encode(request_id),
     );
 
+    let height = popup_height(tool, input);
+
     WebviewWindowBuilder::new(app, "permission", WebviewUrl::App(url.into()))
         .title("Permission")
-        .inner_size(420.0, 320.0)
+        .inner_size(420.0, height)
         .always_on_top(true)
         .resizable(false)
         .decorations(false)
@@ -45,8 +47,38 @@ pub fn show_permission_popup(
         .map_err(|e| e.to_string())?;
 
     let _ = app.emit("permission-request-shown", ());
-    info!("Permission popup shown: tool={}", tool);
+    info!("Permission popup shown: tool={} height={}", tool, height);
     Ok(())
+}
+
+/// AskUserQuestion popups grow with the number of questions/options so the
+/// content and the Submit button stay on-screen. Other tools use a fixed size.
+fn popup_height(tool: &str, input: &str) -> f64 {
+    const BASE: f64 = 120.0; // titlebar + header + Submit + padding
+    const PER_QUESTION: f64 = 56.0; // header + question text + gap
+    const PER_OPTION: f64 = 50.0; // one option row
+    const MAX: f64 = 720.0;
+    const DEFAULT: f64 = 320.0;
+
+    if tool != "AskUserQuestion" {
+        return DEFAULT;
+    }
+    let Ok(obj) = serde_json::from_str::<serde_json::Value>(input) else {
+        return DEFAULT;
+    };
+    let Some(questions) = obj.get("questions").and_then(|v| v.as_array()) else {
+        return DEFAULT;
+    };
+    let mut h = BASE;
+    for q in questions {
+        h += PER_QUESTION;
+        let opts = q.get("options").and_then(|v| v.as_array()).map(|o| o.len()).unwrap_or(0);
+        // +1 for the synthetic "Other" row on single-select questions
+        let is_multi = q.get("multiSelect").and_then(|v| v.as_bool()).unwrap_or(false);
+        let rows = if is_multi { opts } else { opts + 1 };
+        h += rows as f64 * PER_OPTION;
+    }
+    h.min(MAX).max(DEFAULT)
 }
 
 pub fn open_settings_window(app: &AppHandle) -> Result<(), String> {
@@ -81,4 +113,54 @@ pub fn open_main_window(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_question_tool_uses_default_height() {
+        assert_eq!(popup_height("Bash", "{\"command\":\"ls\"}"), 320.0);
+    }
+
+    #[test]
+    fn single_question_grows_above_default() {
+        let input = serde_json::json!({
+            "questions": [{
+                "header": "h", "question": "q?", "multiSelect": false,
+                "options": [{"label":"A","description":"d"},{"label":"B","description":"d"}]
+            }]
+        }).to_string();
+        // 120 + 56 + (2+1 "Other")*50 = 326
+        assert_eq!(popup_height("AskUserQuestion", &input), 326.0);
+    }
+
+    #[test]
+    fn many_questions_clamp_to_max() {
+        let q = serde_json::json!({
+            "header": "h", "question": "q?", "multiSelect": false,
+            "options": [{"label":"A","description":"d"},{"label":"B","description":"d"},
+                        {"label":"C","description":"d"},{"label":"D","description":"d"}]
+        });
+        let input = serde_json::json!({ "questions": [q.clone(), q.clone(), q.clone(), q] }).to_string();
+        assert_eq!(popup_height("AskUserQuestion", &input), 720.0);
+    }
+
+    #[test]
+    fn multiselect_has_no_other_row() {
+        let multi = serde_json::json!({
+            "questions": [{
+                "header": "h", "question": "q?", "multiSelect": true,
+                "options": [{"label":"A","description":"d"},{"label":"B","description":"d"}]
+            }]
+        }).to_string();
+        // 120 + 56 + 2*50 = 276 → clamped up to DEFAULT 320
+        assert_eq!(popup_height("AskUserQuestion", &multi), 320.0);
+    }
+
+    #[test]
+    fn malformed_input_falls_back_to_default() {
+        assert_eq!(popup_height("AskUserQuestion", "not json"), 320.0);
+    }
 }
