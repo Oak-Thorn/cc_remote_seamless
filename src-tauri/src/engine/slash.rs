@@ -65,9 +65,9 @@ pub async fn execute(
             SlashResult::Inject { text: args.to_string(), receipt }
         }
         "/t" => { info!("Test message from Feishu: {}", args); SlashResult::Reply("ok".to_string()) }
-        "/allow" => resolve_permission(chat_id, bindings, agents, permission_waiters, "allow").await,
-        "/deny" => resolve_permission(chat_id, bindings, agents, permission_waiters, "deny").await,
-        "/always" => resolve_permission(chat_id, bindings, agents, permission_waiters, "allowAlways").await,
+        "/allow" => resolve_permission(chat_id, bindings, permission_waiters, "allow").await,
+        "/deny" => resolve_permission(chat_id, bindings, permission_waiters, "deny").await,
+        "/always" => resolve_permission(chat_id, bindings, permission_waiters, "allowAlways").await,
         "/answer" => answer_question(args, chat_id, bindings, permission_waiters).await,
         "/change" => change_agent(args, chat_id, bindings, agents).await,
         "/clear" => clear_input(chat_id, bindings, agents).await,
@@ -223,7 +223,6 @@ fn full(chat_id: &str, bindings: &Arc<BindingStore>) -> SlashResult {
 async fn resolve_permission(
     chat_id: &str,
     bindings: &Arc<BindingStore>,
-    agents: &HashMap<String, Arc<dyn AgentConnector>>,
     waiters: &PermissionWaiters,
     action: &str,
 ) -> SlashResult {
@@ -257,21 +256,13 @@ async fn resolve_permission(
     }
     drop(map);
 
-    // No waiter — fall back to terminal injection (Claude Code waiting in its own UI)
-    let keystroke = match action {
-        "allow" => "y",
-        "deny" => "n",
-        "allowAlways" => "a",
-        _ => "y",
-    };
-    if let Some(agent) = agents.get(&binding.agent_id) {
-        match agent.inject_input(&binding.session_id, keystroke).await {
-            Ok(_) => SlashResult::Reply(format!("Permission: {} (injected)", action)),
-            Err(e) => SlashResult::Reply(format!("Inject failed: {}", e)),
-        }
-    } else {
-        SlashResult::Reply("Agent not found".to_string())
-    }
+    // No waiter for this session: the PermissionRequest hook hasn't reached us
+    // yet (or already timed out), so there is nothing to reply to and we must
+    // NOT stash the decision. Tell the user plainly so they can retry once the
+    // permission card actually arrives, instead of silently losing the /allow.
+    SlashResult::Reply(
+        "未找到待处理的授权请求：授权卡片可能尚未送达或已超时，请在收到授权卡片后再回复 /allow、/always 或 /deny。".to_string(),
+    )
 }
 
 const HELP_TEXT: &str = "\
