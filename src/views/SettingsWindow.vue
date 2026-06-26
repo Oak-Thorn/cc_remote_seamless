@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { useSettingsStore } from "../stores/settings";
 import FloatingIconView from "../components/icons/FloatingIcon.vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import QRCode from "qrcode";
@@ -16,6 +17,7 @@ const qrDataUrl = ref("");
 const qrStatus = ref<"idle" | "loading" | "waiting" | "done" | "error">("idle");
 const qrError = ref("");
 const qrExpireIn = ref(0);
+const appVersion = ref("");
 
 // Dynamically discover all SVG icons from the resources directory.
 // Adding a new .svg file to src-tauri/resources/icons/ will auto-register it.
@@ -48,6 +50,7 @@ onMounted(async () => {
   settings.syncLogToFile();
   await settings.loadAvailableSounds();
   await reloadIcons();
+  appVersion.value = await getVersion().catch(() => "");
 });
 
 const unlisteners: Array<() => void> = [];
@@ -321,7 +324,7 @@ chat_id = "&lt;your_chat_id&gt;"</pre>
           <h3>About</h3>
           <div class="about-info">
             <div class="about-row"><span class="label">Name</span><span>CC Remote Seamless</span></div>
-            <div class="about-row"><span class="label">Version</span><span>0.1.0</span></div>
+            <div class="about-row"><span class="label">Version</span><span>{{ appVersion }}</span></div>
             <div class="about-row"><span class="label">Description</span><span>Remote control panel for Claude Code sessions via IM platforms</span></div>
             <div class="about-row"><span class="label">Tech</span><span>Tauri 2 + Vue 3 + Rust</span></div>
             <div class="about-row"><span class="label">Author</span><span>thorn</span></div>

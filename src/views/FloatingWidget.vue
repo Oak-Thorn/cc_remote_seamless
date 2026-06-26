@@ -159,7 +159,7 @@ watch(() => settingsStore.floatingIcon, () => loadCustomIconSvg());
 </script>
 
 <template>
-  <div v-if="collapsed" class="collapsed-dot" @mouseenter="expand">
+  <div v-if="collapsed" class="collapsed-dot" @click="expand">
     <FloatingIconView :icon="settingsStore.floatingIcon" :color="statusColor" :svgContent="customSvgContent" />
   </div>
   <div v-else class="float-widget" @mouseleave="onMouseLeave">
