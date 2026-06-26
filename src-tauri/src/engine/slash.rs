@@ -236,13 +236,23 @@ async fn resolve_permission(
     let key = map.keys().find(|k| k.starts_with(&session_prefix)).cloned();
     if let Some(request_id) = key {
         if let Some(entry) = map.remove(&request_id) {
-            let response = match action {
-                "deny" => PermissionResponse::deny("Denied by user"),
-                "allowAlways" => PermissionResponse::allow_with(None, Some(entry.suggestions)),
-                _ => PermissionResponse::allow(),
+            // "allowAlways" only carries weight when Claude Code supplied
+            // permission_suggestions; without them an empty updatedPermissions
+            // would silently degrade to a one-shot allow, so report that.
+            let (response, reply) = match action {
+                "deny" => (PermissionResponse::deny("Denied by user"), "Permission: deny".to_string()),
+                "allowAlways" if !entry.suggestions.is_empty() => (
+                    PermissionResponse::allow_with(None, Some(entry.suggestions)),
+                    "Permission: allow always".to_string(),
+                ),
+                "allowAlways" => (
+                    PermissionResponse::allow(),
+                    "Permission: allow (no always-rule available, allowed once)".to_string(),
+                ),
+                _ => (PermissionResponse::allow(), "Permission: allow".to_string()),
             };
             let _ = entry.sender.send(response);
-            return SlashResult::Reply(format!("Permission: {}", action));
+            return SlashResult::Reply(reply);
         }
     }
     drop(map);

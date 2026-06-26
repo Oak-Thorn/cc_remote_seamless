@@ -192,6 +192,7 @@ pub fn run() {
             let handle_for_hooks = handle.clone();
             let engine_for_hooks = engine.clone();
             let agent_chat_ids_for_hooks = agent_chat_ids.clone();
+            let permission_waiters_for_hooks = permission_waiters.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = hook_rx.recv().await {
                     // Auto-bind active session only on events that signal the
@@ -236,7 +237,11 @@ pub fn run() {
                         let _ = window::show_permission_popup(
                             &handle_for_hooks, session_id, tool, input, request_id,
                         );
-                        let card = build_permission_card(tool, input);
+                        let has_always = permission_waiters_for_hooks.lock().await
+                            .get(request_id)
+                            .map(|e| !e.suggestions.is_empty())
+                            .unwrap_or(false);
+                        let card = build_permission_card(tool, input, has_always);
                         let eng = engine_for_hooks.lock().await;
                         eng.forward_card_to_platforms("claude-code", session_id, card).await;
                         drop(eng);
@@ -251,7 +256,7 @@ pub fn run() {
                         let _ = window::show_permission_popup(
                             &handle_for_hooks, session_id, tool, input, request_id,
                         );
-                        let card = build_permission_card(tool, input);
+                        let card = build_permission_card(tool, input, false);
                         let eng = engine_for_hooks.lock().await;
                         eng.forward_card_to_platforms("claude-code", session_id, card).await;
                         drop(eng);
@@ -296,7 +301,7 @@ pub fn run() {
                         let _ = window::show_permission_popup(
                             &handle_for_hooks, session_id, tool, input, request_id,
                         );
-                        let card = build_permission_card(tool, input);
+                        let card = build_permission_card(tool, input, false);
                         let eng = engine_for_hooks.lock().await;
                         eng.forward_card_to_platforms("pi", session_id, card).await;
                         drop(eng);
@@ -432,7 +437,7 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn build_permission_card(tool: &str, input: &str) -> serde_json::Value {
+fn build_permission_card(tool: &str, input: &str, has_always: bool) -> serde_json::Value {
     let obj: serde_json::Value = serde_json::from_str(input).unwrap_or_default();
     let mut lines = Vec::new();
 
@@ -546,7 +551,8 @@ fn build_permission_card(tool: &str, input: &str) -> serde_json::Value {
                 "回复 /answer N（单选）、/answer N M（多选）、/answer N 文本（Other）".to_string()
             }
         }
-        _ => "Reply /allow or /deny | Desktop popup also available".to_string(),
+        _ if has_always => "回复 /allow（本次放行）、/always（永久放行此类操作）或 /deny（拒绝）。也可用桌面弹窗".to_string(),
+        _ => "回复 /allow（放行）或 /deny（拒绝）。也可用桌面弹窗".to_string(),
     };
 
     let body = lines.join("\n");
