@@ -1,3 +1,4 @@
+pub mod label;
 pub mod router;
 pub mod slash;
 pub mod store;
@@ -91,15 +92,30 @@ impl Engine {
         self.agents.values()
     }
 
+    /// Resolve a human-readable window label for a session by looking up its
+    /// working dir across registered agents. Falls back to the short id alone
+    /// when the session is no longer discoverable.
+    async fn session_label(&self, session_id: &str) -> String {
+        for agent in self.agents.values() {
+            for s in agent.discover_sessions().await {
+                if s.id == session_id {
+                    return label::window_label(session_id, s.working_dir.as_deref());
+                }
+            }
+        }
+        label::window_label(session_id, None)
+    }
+
     pub async fn forward_to_platforms(&self, agent_id: &str, session_id: &str, text: &str) {
         let platform_ids = self.platforms_for_agent(agent_id);
+        let labeled = format!("[{}]\n{}", self.session_label(session_id).await, text);
         for pid in platform_ids {
             if let Some(platform) = self.platforms.get(pid) {
                 if let Some(chat_id) = self.platform_chat_ids.get(pid) {
                     let binding = self.bindings.get(chat_id);
                     if binding.as_ref().map(|b| b.session_id.as_str()) == Some(session_id) {
                         tracing::info!("Forwarding to platform={} chat_id={}", pid, chat_id);
-                        if let Err(e) = platform.send_text(chat_id, text).await {
+                        if let Err(e) = platform.send_text(chat_id, &labeled).await {
                             warn!("Forward to {} failed: {}", pid, e);
                         }
                     }
@@ -154,7 +170,7 @@ impl Engine {
                     self.last_binding_change.lock().unwrap().replace(session_id);
                     return;
                 }
-                slash::SlashResult::Inject(text) => {
+                slash::SlashResult::Inject { text, receipt } => {
                     let binding = match self.bindings.get(&msg.chat_id) {
                         Some(b) => b,
                         None => {
@@ -169,10 +185,17 @@ impl Engine {
                     match self.agents.get(&binding.agent_id) {
                         Some(agent) => {
                             info!("Injecting to agent={} session={}", binding.agent_id, binding.session_id);
-                            if let Err(e) = agent.inject_input(&binding.session_id, &text).await {
-                                warn!("Inject failed: {}", e);
-                                if let Some(platform) = self.platforms.get(&msg.platform) {
-                                    let _ = platform.send_text(&msg.chat_id, &format!("Inject failed: {}", e)).await;
+                            match agent.inject_input(&binding.session_id, &text).await {
+                                Ok(_) => {
+                                    if let Some(platform) = self.platforms.get(&msg.platform) {
+                                        let _ = platform.send_text(&msg.chat_id, &receipt).await;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Inject failed: {}", e);
+                                    if let Some(platform) = self.platforms.get(&msg.platform) {
+                                        let _ = platform.send_text(&msg.chat_id, &format!("Inject failed: {}", e)).await;
+                                    }
                                 }
                             }
                         }
@@ -202,6 +225,7 @@ impl Engine {
                 let now = chrono::Utc::now().timestamp();
                 self.messages.insert(session_id, "agent", text, now).ok();
 
+                let labeled = format!("[{}]\n{}", self.session_label(session_id).await, text);
                 let platform_ids = self.platforms_for_agent("claude-code");
                 for pid in &platform_ids {
                     if let Some(platform) = self.platforms.get(*pid) {
@@ -210,12 +234,14 @@ impl Engine {
                             if binding.as_ref().map(|b| b.session_id.as_str()) != Some(session_id.as_str()) {
                                 continue;
                             }
+                            // Store the raw text so /full shows clean output;
+                            // only the forwarded copy carries the sender label.
                             self.bindings.store_last_output(chat_id, text);
                             if self.bindings.is_muted(chat_id) {
                                 info!("Muted, skipping forward to {}", pid);
                                 continue;
                             }
-                            if let Err(e) = platform.send_text(chat_id, text).await {
+                            if let Err(e) = platform.send_text(chat_id, &labeled).await {
                                 warn!("Send to {} failed: {}", pid, e);
                             }
                         }

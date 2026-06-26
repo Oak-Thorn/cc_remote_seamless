@@ -12,12 +12,18 @@ pub struct Binding {
 
 pub struct BindingStore {
     bindings: RwLock<HashMap<String, Binding>>,
+    /// Per-chat record of the session the user last *routed a prompt to*
+    /// (via `/p` or `/switch`). Distinct from the live binding, which drifts
+    /// on every hook event — this is the baseline used to detect that drift
+    /// and warn the user before a prompt lands on an unexpected window.
+    last_routed: RwLock<HashMap<String, String>>,
 }
 
 impl BindingStore {
     pub fn new() -> Self {
         Self {
             bindings: RwLock::new(HashMap::new()),
+            last_routed: RwLock::new(HashMap::new()),
         }
     }
 
@@ -48,6 +54,17 @@ impl BindingStore {
     pub fn is_pinned(&self, chat_id: &str) -> bool {
         let map = self.bindings.read().unwrap();
         map.get(chat_id).map(|b| b.pinned).unwrap_or(false)
+    }
+
+    /// Set the pinned flag on an existing binding. Returns false when the chat
+    /// has no binding to pin. Pinning stops hook-driven active drift; unpinning
+    /// restores it.
+    pub fn set_pinned(&self, chat_id: &str, pinned: bool) -> bool {
+        let mut map = self.bindings.write().unwrap();
+        match map.get_mut(chat_id) {
+            Some(b) => { b.pinned = pinned; true }
+            None => false,
+        }
     }
 
     pub fn bind_pinned_session(&self, session_id: &str) {
@@ -119,6 +136,19 @@ impl BindingStore {
         let map = self.bindings.read().unwrap();
         map.get(chat_id).and_then(|b| b.last_output.clone())
     }
+
+    /// Read the session this chat last *routed a prompt to* (drift baseline).
+    pub fn get_last_routed(&self, chat_id: &str) -> Option<String> {
+        let map = self.last_routed.read().unwrap();
+        map.get(chat_id).cloned()
+    }
+
+    /// Record the session this chat just routed a prompt to. Call on every
+    /// successful `/p` and on `/switch`, so the next `/p` can detect drift.
+    pub fn set_last_routed(&self, chat_id: &str, session_id: &str) {
+        let mut map = self.last_routed.write().unwrap();
+        map.insert(chat_id.to_string(), session_id.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -149,5 +179,36 @@ mod tests {
         store.bind("chat_2", "claude", "sess_b");
         let found = store.find_chat_for_session("claude", "sess_a");
         assert_eq!(found, Some("chat_1".to_string()));
+    }
+
+    #[test]
+    fn set_pinned_toggles_existing_binding() {
+        let store = BindingStore::new();
+        store.bind("chat_1", "claude", "sess_a");
+        assert!(!store.is_pinned("chat_1"));
+
+        assert!(store.set_pinned("chat_1", true));
+        assert!(store.is_pinned("chat_1"));
+
+        assert!(store.set_pinned("chat_1", false));
+        assert!(!store.is_pinned("chat_1"));
+    }
+
+    #[test]
+    fn set_pinned_returns_false_without_binding() {
+        let store = BindingStore::new();
+        assert!(!store.set_pinned("chat_x", true));
+    }
+
+    #[test]
+    fn pin_survives_rebind_of_same_chat() {
+        // bind() preserves muted; pin is independent. After pinning, a manual
+        // re-bind clears pin (new Binding), which is expected — only the hook
+        // loop checks is_pinned before re-binding.
+        let store = BindingStore::new();
+        store.bind("chat_1", "claude", "sess_a");
+        store.set_pinned("chat_1", true);
+        store.bind("chat_1", "claude", "sess_b");
+        assert!(!store.is_pinned("chat_1"));
     }
 }

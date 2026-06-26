@@ -9,7 +9,9 @@ use super::store::MessageStore;
 
 pub enum SlashResult {
     Reply(String),
-    Inject(String),
+    /// Inject `text` into the bound session. `receipt` is sent to the user
+    /// after a successful injection (window label + any active-drift warning).
+    Inject { text: String, receipt: String },
     BindingChanged { reply: String, session_id: String },
     Noop,
 }
@@ -34,21 +36,33 @@ pub async fn execute(
         "/status" => status(chat_id, bindings, agents).await,
         "/list" => list(agents).await,
         "/switch" => switch(args, chat_id, bindings, agents).await,
+        "/pin" => pin(args, chat_id, bindings, agents).await,
+        "/unpin" => unpin(chat_id, bindings, agents).await,
         "/mute" => { bindings.set_muted(chat_id, true); SlashResult::Reply("Muted".to_string()) }
         "/unmute" => { bindings.set_muted(chat_id, false); SlashResult::Reply("Unmuted".to_string()) }
         "/full" => full(chat_id, bindings),
         "/p" => {
             if args.is_empty() { return SlashResult::Reply("Usage: /p <prompt>".to_string()); }
-            if let Some(binding) = bindings.get(chat_id) {
-                if let Some(agent) = agents.get(&binding.agent_id) {
-                    for s in agent.discover_sessions().await {
-                        if s.id == binding.session_id && s.state == crate::agent::SessionState::Busy {
+            let binding = match bindings.get(chat_id) {
+                Some(b) => b,
+                None => return SlashResult::Reply("No session bound. Use /switch <id> or /radar first.".to_string()),
+            };
+            // Resolve the target session's working dir for a readable label,
+            // and reject if it is currently busy.
+            let mut working_dir = None;
+            if let Some(agent) = agents.get(&binding.agent_id) {
+                for s in agent.discover_sessions().await {
+                    if s.id == binding.session_id {
+                        if s.state == crate::agent::SessionState::Busy {
                             return SlashResult::Reply("Session is busy, please wait until idle".to_string());
                         }
+                        working_dir = s.working_dir.clone();
                     }
                 }
             }
-            SlashResult::Inject(args.to_string())
+            let receipt = build_send_receipt(chat_id, &binding.session_id, working_dir.as_deref(), bindings);
+            bindings.set_last_routed(chat_id, &binding.session_id);
+            SlashResult::Inject { text: args.to_string(), receipt }
         }
         "/t" => { info!("Test message from Feishu: {}", args); SlashResult::Reply("ok".to_string()) }
         "/allow" => resolve_permission(chat_id, bindings, agents, permission_waiters, "allow").await,
@@ -73,9 +87,10 @@ async fn status(chat_id: &str, bindings: &Arc<BindingStore>, agents: &HashMap<St
         for s in agent.discover_sessions().await {
             if s.id == binding.session_id {
                 let muted = if bindings.is_muted(chat_id) { " [muted]" } else { "" };
+                let pinned = if bindings.is_pinned(chat_id) { " [pinned]" } else { "" };
                 return SlashResult::Reply(format!(
-                    "Session: {}\nAgent: {}\nState: {:?}\nDir: {}{}",
-                    s.id, s.agent, s.state, s.working_dir.unwrap_or_default(), muted
+                    "Session: {}\nAgent: {}\nState: {:?}\nDir: {}{}{}",
+                    s.id, s.agent, s.state, s.working_dir.unwrap_or_default(), muted, pinned
                 ));
             }
         }
@@ -105,11 +120,95 @@ async fn switch(args: &str, chat_id: &str, bindings: &Arc<BindingStore>, agents:
         for s in agent.discover_sessions().await {
             if s.id.starts_with(args) || s.id == args {
                 bindings.bind(chat_id, &s.agent, &s.id);
-                return SlashResult::Reply(format!("Switched to session: {}\nDir: {}", s.id, s.working_dir.unwrap_or_default()));
+                // Reset the drift baseline: an explicit switch is the new
+                // "expected" window, so the next /p shouldn't warn about it.
+                bindings.set_last_routed(chat_id, &s.id);
+                let label = super::label::window_label(&s.id, s.working_dir.as_deref());
+                return SlashResult::Reply(format!("Switched to {}\nDir: {}", label, s.working_dir.unwrap_or_default()));
             }
         }
     }
     SlashResult::Reply(format!("Session not found: {}", args))
+}
+
+/// `/pin` pins the chat's current binding so hook events stop drifting active
+/// away from it. `/pin <id>` first switches to the matching session, then pins.
+async fn pin(args: &str, chat_id: &str, bindings: &Arc<BindingStore>, agents: &HashMap<String, Arc<dyn AgentConnector>>) -> SlashResult {
+    // With an argument, resolve + bind to the target first (reusing switch).
+    if !args.is_empty() {
+        for agent in agents.values() {
+            for s in agent.discover_sessions().await {
+                if s.id.starts_with(args) || s.id == args {
+                    bindings.bind(chat_id, &s.agent, &s.id);
+                    bindings.set_last_routed(chat_id, &s.id);
+                    bindings.set_pinned(chat_id, true);
+                    let label = super::label::window_label(&s.id, s.working_dir.as_deref());
+                    return SlashResult::Reply(format!("📌 已固定 {}\nhook 事件不再漂移 active，用 /unpin 解除", label));
+                }
+            }
+        }
+        return SlashResult::Reply(format!("Session not found: {}", args));
+    }
+
+    // No argument: pin whatever the chat is currently bound to.
+    let binding = match bindings.get(chat_id) {
+        Some(b) => b,
+        None => return SlashResult::Reply("No session bound. Use /switch <id> first.".to_string()),
+    };
+    let working_dir = session_working_dir(&binding.agent_id, &binding.session_id, agents).await;
+    bindings.set_pinned(chat_id, true);
+    let label = super::label::window_label(&binding.session_id, working_dir.as_deref());
+    SlashResult::Reply(format!("📌 已固定 {}\nhook 事件不再漂移 active，用 /unpin 解除", label))
+}
+
+/// `/unpin` releases the pin, letting hook-driven active drift resume.
+async fn unpin(chat_id: &str, bindings: &Arc<BindingStore>, agents: &HashMap<String, Arc<dyn AgentConnector>>) -> SlashResult {
+    let binding = match bindings.get(chat_id) {
+        Some(b) => b,
+        None => return SlashResult::Reply("No session bound".to_string()),
+    };
+    if !bindings.is_pinned(chat_id) {
+        return SlashResult::Reply("当前未固定".to_string());
+    }
+    bindings.set_pinned(chat_id, false);
+    let working_dir = session_working_dir(&binding.agent_id, &binding.session_id, agents).await;
+    let label = super::label::window_label(&binding.session_id, working_dir.as_deref());
+    SlashResult::Reply(format!("已解除固定 {}\nactive 将随 hook 事件自动漂移", label))
+}
+
+/// Look up a session's working dir for labeling. Returns None when the session
+/// is no longer discoverable.
+async fn session_working_dir(agent_id: &str, session_id: &str, agents: &HashMap<String, Arc<dyn AgentConnector>>) -> Option<String> {
+    let agent = agents.get(agent_id)?;
+    agent.discover_sessions().await.into_iter()
+        .find(|s| s.id == session_id)
+        .and_then(|s| s.working_dir)
+}
+
+/// Build the receipt shown after a successful `/p`. Confirms which window the
+/// prompt is going to, and — when the active session has drifted away from the
+/// one this chat last routed to — warns the user before the prompt lands on an
+/// unexpected window.
+fn build_send_receipt(
+    chat_id: &str,
+    target_session: &str,
+    target_dir: Option<&str>,
+    bindings: &Arc<BindingStore>,
+) -> String {
+    let target_label = super::label::window_label(target_session, target_dir);
+    match bindings.get_last_routed(chat_id) {
+        Some(prev) if prev != target_session => {
+            let prev_label = super::label::window_label(&prev, None);
+            format!(
+                "⚠️ active 已从 [{}] 漂移到 [{}]\n本次将发往 {}。如需回到原窗口请 /switch {}",
+                prev_label,
+                target_label,
+                target_label,
+                &prev.chars().take(6).collect::<String>(),
+            )
+        }
+        _ => format!("→ {} 已发送", target_label),
+    }
 }
 
 fn full(chat_id: &str, bindings: &Arc<BindingStore>) -> SlashResult {
@@ -167,6 +266,8 @@ const HELP_TEXT: &str = "\
 /status - Show current session state
 /list - List all active sessions
 /switch <id> - Switch to session
+/pin [id] - Pin current (or <id>) session against active drift
+/unpin - Release pin, resume active drift
 /change [agent] - Switch agent (list if no arg)
 /skill <keyword> - Search skills by name/description
 /mute - Mute output forwarding
@@ -614,7 +715,7 @@ async fn answer_question(
         Some(k) => k,
         None => {
             drop(map);
-            return SlashResult::Inject(answer_text);
+            return SlashResult::Inject { text: answer_text, receipt: "Answered".to_string() };
         }
     };
 
