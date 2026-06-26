@@ -71,6 +71,7 @@ pub async fn execute(
         "/answer" => answer_question(args, chat_id, bindings, permission_waiters).await,
         "/change" => change_agent(args, chat_id, bindings, agents).await,
         "/clear" => clear_input(chat_id, bindings, agents).await,
+        "/enter" => enter(chat_id, bindings, agents).await,
         "/stop" => stop_session(chat_id, bindings, agents).await,
         "/skill" => search_skills(args),
         "/radar" => radar(agents).await,
@@ -102,7 +103,8 @@ async fn list(agents: &HashMap<String, Arc<dyn AgentConnector>>) -> SlashResult 
     let mut lines = vec![];
     for agent in agents.values() {
         for s in agent.discover_sessions().await {
-            lines.push(format!("[{:?}] {} ({})", s.state, s.id, s.working_dir.unwrap_or_default()));
+            let state = format!("{:?}", s.state).to_lowercase();
+            lines.push(format!("==》  <<{}>>  {}  ({})", state, s.id, s.working_dir.unwrap_or_default()));
         }
     }
     if lines.is_empty() {
@@ -279,6 +281,7 @@ const HELP_TEXT: &str = "\
 /deny - Deny permission
 /always - Allow always
 /clear - Clear session input box
+/enter - Submit current input box (send Return)
 /stop - Stop current session task
 /radar - Rediscover running agents
 /answer 1 - Single select option 1
@@ -614,6 +617,24 @@ async fn clear_input(chat_id: &str, bindings: &Arc<BindingStore>, agents: &HashM
         match agent.inject_input(&binding.session_id, "\x03").await {
             Ok(_) => SlashResult::Reply("Input cleared".to_string()),
             Err(e) => SlashResult::Reply(format!("Clear failed: {}", e)),
+        }
+    } else {
+        SlashResult::Reply("Agent not found".to_string())
+    }
+}
+
+/// `/enter` sends a bare Return keystroke to the bound session, submitting
+/// whatever is already in its input box. Useful when the input was populated
+/// out-of-band and only needs a final submit.
+async fn enter(chat_id: &str, bindings: &Arc<BindingStore>, agents: &HashMap<String, Arc<dyn AgentConnector>>) -> SlashResult {
+    let binding = match bindings.get(chat_id) {
+        Some(b) => b,
+        None => return SlashResult::Reply("No session bound".to_string()),
+    };
+    if let Some(agent) = agents.get(&binding.agent_id) {
+        match agent.inject_input(&binding.session_id, "\r").await {
+            Ok(_) => SlashResult::Reply("Enter sent".to_string()),
+            Err(e) => SlashResult::Reply(format!("Enter failed: {}", e)),
         }
     } else {
         SlashResult::Reply("Agent not found".to_string())

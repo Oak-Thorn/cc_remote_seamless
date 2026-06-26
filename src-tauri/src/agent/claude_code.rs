@@ -359,12 +359,13 @@ impl AgentConnector for ClaudeCodeConnector {
         let escaped_text = text.replace('\\', "\\\\").replace('"', "\\\"");
 
         // Special control characters: send keystroke instead of clipboard paste
-        let is_control = text == "\x1b" || text == "\x03";
+        let is_control = text == "\x1b" || text == "\x03" || text == "\r";
 
         let script = if is_control {
             let keystroke_cmd = match text {
                 "\x1b" => "key code 53", // Escape
                 "\x03" => "keystroke \"c\" using control down", // Ctrl+C
+                "\r" => "key code 36", // Return
                 _ => unreachable!(),
             };
             match terminal_app.as_str() {
