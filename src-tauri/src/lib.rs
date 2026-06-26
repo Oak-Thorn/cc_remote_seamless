@@ -194,24 +194,21 @@ pub fn run() {
             let agent_chat_ids_for_hooks = agent_chat_ids.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = hook_rx.recv().await {
-                    // Auto-bind to all configured chat_ids (unless pinned)
+                    // Auto-bind active session only on events that signal the
+                    // user's attention is (or should be) on this window:
+                    // permission requests, question elicitations, and message
+                    // I/O (prompt submit + agent stop). Lifecycle/tool events
+                    // (SessionStart, Pre/PostToolUse, compaction, …) no longer
+                    // drift the active binding — they fire constantly while a
+                    // session works and caused active to thrash across windows.
                     let (sid, agent_id) = match &event {
-                        HookEvent::SessionStart { session_id, .. } => (Some(session_id.as_str()), "claude-code"),
                         HookEvent::PromptSubmit { session_id, .. } => (Some(session_id.as_str()), "claude-code"),
-                        HookEvent::PreToolUse { session_id, .. } => (Some(session_id.as_str()), "claude-code"),
                         HookEvent::PermissionRequest { session_id, .. } => (Some(session_id.as_str()), "claude-code"),
-                        HookEvent::PostToolUse { session_id, .. } => (Some(session_id.as_str()), "claude-code"),
                         HookEvent::Stop { session_id, .. } => (Some(session_id.as_str()), "claude-code"),
                         HookEvent::Elicitation { session_id, .. } => (Some(session_id.as_str()), "claude-code"),
-                        HookEvent::PiSessionStart { session_id, .. } => (Some(session_id.as_str()), "pi"),
                         HookEvent::PiInput { session_id, .. } => (Some(session_id.as_str()), "pi"),
-                        HookEvent::PiPreToolUse { session_id, .. } => (Some(session_id.as_str()), "pi"),
-                        HookEvent::PiPostToolUse { session_id, .. } => (Some(session_id.as_str()), "pi"),
                         HookEvent::PiPermissionRequest { session_id, .. } => (Some(session_id.as_str()), "pi"),
                         HookEvent::PiStop { session_id, .. } => (Some(session_id.as_str()), "pi"),
-                        HookEvent::PiAgentStart { session_id, .. } => (Some(session_id.as_str()), "pi"),
-                        HookEvent::PiPreCompact { session_id, .. } => (Some(session_id.as_str()), "pi"),
-                        HookEvent::PiPostCompact { session_id, .. } => (Some(session_id.as_str()), "pi"),
                         _ => (None, "claude-code"),
                     };
                     if let Some(session_id) = sid {
