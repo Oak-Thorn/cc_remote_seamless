@@ -41,6 +41,11 @@ pub fn show_permission_popup(
         .title("Permission")
         .inner_size(420.0, height)
         .always_on_top(true)
+        // On macOS an unfocused window swallows its first click just to become
+        // key, so the radio needed two clicks. Request focus on build and let
+        // the first mouse-down pass through to the webview content.
+        .focused(true)
+        .accept_first_mouse(true)
         .resizable(false)
         .decorations(false)
         .build()
