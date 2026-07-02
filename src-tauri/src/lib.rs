@@ -412,6 +412,7 @@ pub fn run() {
             commands::bind_session,
             commands::inject_input,
             commands::respond_permission,
+            commands::get_permission_request,
             commands::frontend_log,
             commands::pin_session,
             commands::get_active_session,

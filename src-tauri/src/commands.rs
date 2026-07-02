@@ -72,6 +72,31 @@ pub fn frontend_log(level: String, message: String) {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PermissionRequestInfo {
+    pub tool: String,
+    pub input: String,
+    pub session_id: String,
+}
+
+/// Fetch a pending permission request's display data by request_id. The popup
+/// calls this on mount instead of receiving the (potentially huge) input via
+/// its window URL. Does not remove the waiter.
+#[tauri::command]
+pub async fn get_permission_request(
+    waiters: State<'_, PermissionWaiters>,
+    request_id: String,
+) -> Result<PermissionRequestInfo, String> {
+    let map = waiters.lock().await;
+    map.get(&request_id)
+        .map(|e| PermissionRequestInfo {
+            tool: e.tool.clone(),
+            input: e.input.to_string(),
+            session_id: e.session_id.clone(),
+        })
+        .ok_or_else(|| "No pending permission request".to_string())
+}
+
 #[tauri::command]
 pub async fn respond_permission(
     waiters: State<'_, PermissionWaiters>,

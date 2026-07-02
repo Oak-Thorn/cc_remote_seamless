@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, reactive } from "vue";
+import { ref, computed, reactive, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const params = new URLSearchParams(window.location.search);
-const tool = ref(decodeURIComponent(params.get("tool") || "Unknown"));
-const rawInput = ref(decodeURIComponent(params.get("input") || ""));
-const sessionId = ref(decodeURIComponent(params.get("session") || ""));
+const tool = ref("Unknown");
+const rawInput = ref("");
+const sessionId = ref("");
 const requestId = ref(decodeURIComponent(params.get("request_id") || ""));
 const selectedBehavior = ref("allow");
 const submitError = ref("");
@@ -16,6 +16,33 @@ const submitError = ref("");
 function backendLog(level: "info" | "warn" | "error", message: string) {
   invoke("frontend_log", { level, message }).catch(() => {});
 }
+
+interface PermissionRequestInfo {
+  tool: string;
+  input: string;
+  session_id: string;
+}
+
+// The tool/input/session are fetched by request_id on mount rather than passed
+// through the window URL, which overflowed the webview header limit (blank
+// popup) for large inputs like an ExitPlanMode plan.
+onMounted(async () => {
+  if (!requestId.value) {
+    submitError.value = "缺少 request_id，无法加载权限请求。";
+    return;
+  }
+  try {
+    const info = await invoke<PermissionRequestInfo>("get_permission_request", {
+      requestId: requestId.value,
+    });
+    tool.value = info.tool || "Unknown";
+    rawInput.value = info.input || "";
+    sessionId.value = info.session_id || "";
+  } catch (e) {
+    submitError.value = `加载权限请求失败：${String(e)}`;
+    backendLog("error", `popup get_permission_request failed: ${String(e)}`);
+  }
+});
 
 interface QuestionOption {
   label: string;

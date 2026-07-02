@@ -27,14 +27,13 @@ pub fn show_permission_popup(
         let _ = win.close();
     }
 
-    let url = format!(
-        "/?view=permission&session={}&tool={}&input={}&request_id={}",
-        url_encode(session_id),
-        url_encode(tool),
-        url_encode(input),
-        url_encode(request_id),
-    );
+    // Only the request_id goes in the URL. Tool/session/input are fetched by
+    // the popup via the get_permission_request command — embedding a large
+    // input (e.g. an ExitPlanMode plan) here overflowed the webview's request
+    // header limit and left the window blank.
+    let url = format!("/?view=permission&request_id={}", url_encode(request_id));
 
+    let _ = session_id;
     let height = popup_height(tool, input);
 
     WebviewWindowBuilder::new(app, "permission", WebviewUrl::App(url.into()))

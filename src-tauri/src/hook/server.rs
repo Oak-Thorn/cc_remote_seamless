@@ -105,6 +105,10 @@ pub struct PermissionWaiterEntry {
     pub sender: oneshot::Sender<PermissionResponse>,
     pub suggestions: Vec<serde_json::Value>,
     pub input: serde_json::Value,
+    /// Tool name and session id, so the popup can fetch them by request_id
+    /// instead of receiving them through the (length-limited) window URL.
+    pub tool: String,
+    pub session_id: String,
     /// Accumulated AskUserQuestion answers keyed by question text, filled
     /// incrementally by `/answer QN ...` until every question is answered.
     pub pending_answers: HashMap<String, String>,
@@ -325,7 +329,7 @@ async fn handle_elicitation(
     let tool_input = raw.get("tool_input").or_else(|| raw.get("toolInput"))
         .cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
-    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![], input: tool_input, pending_answers: HashMap::new() });
+    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![], input: tool_input, tool: tool.clone(), session_id: session_id.clone(), pending_answers: HashMap::new() });
 
     let _ = state.tx.send(HookEvent::Elicitation { session_id: session_id.clone(), tool: tool.clone(), input, cwd, request_id: request_id.clone() });
 
@@ -391,7 +395,7 @@ async fn handle_permission(
     let tool_input = raw.get("tool_input").or_else(|| raw.get("toolInput"))
         .cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
-    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions, input: tool_input, pending_answers: HashMap::new() });
+    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions, input: tool_input, tool: tool.clone(), session_id: session_id.clone(), pending_answers: HashMap::new() });
 
     let _ = state.tx.send(HookEvent::PermissionRequest {
         session_id,
@@ -493,7 +497,7 @@ async fn handle_pi_permission(
 
     let tool_input = raw.get("tool_input").cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
-    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![], input: tool_input, pending_answers: HashMap::new() });
+    state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![], input: tool_input, tool: tool.clone(), session_id: session_id.clone(), pending_answers: HashMap::new() });
 
     let _ = state.tx.send(HookEvent::PiPermissionRequest {
         session_id,

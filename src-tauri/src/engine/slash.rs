@@ -232,7 +232,10 @@ async fn resolve_permission(
     };
     let session_prefix = format!("{}:", binding.session_id);
     let mut map = waiters.lock().await;
-    let key = map.keys().find(|k| k.starts_with(&session_prefix)).cloned();
+    // request_id may carry an `eli:`/`pi:` prefix, so match on "contains
+    // `<session>:`" rather than a leading match, otherwise Elicitation/Pi
+    // permissions can never be resolved from IM.
+    let key = map.keys().find(|k| k.contains(&session_prefix)).cloned();
     if let Some(request_id) = key {
         if let Some(entry) = map.remove(&request_id) {
             // "allowAlways" only carries weight when Claude Code supplied
@@ -250,8 +253,15 @@ async fn resolve_permission(
                 ),
                 _ => (PermissionResponse::allow(), "Permission: allow".to_string()),
             };
-            let _ = entry.sender.send(response);
-            return SlashResult::Reply(reply);
+            // A failed send means the HTTP handler already gave up (timeout) and
+            // dropped the receiver. Report that honestly instead of claiming the
+            // permission was applied.
+            return match entry.sender.send(response) {
+                Ok(()) => SlashResult::Reply(reply),
+                Err(_) => SlashResult::Reply(
+                    "授权请求已失效（可能已超时或已被处理），请在收到新卡片后重试。".to_string(),
+                ),
+            };
         }
     }
     drop(map);
@@ -733,7 +743,7 @@ async fn answer_question(
     };
     let session_prefix = format!("{}:", binding.session_id);
     let mut map = waiters.lock().await;
-    let key = match map.keys().find(|k| k.starts_with(&session_prefix)).cloned() {
+    let key = match map.keys().find(|k| k.contains(&session_prefix)).cloned() {
         Some(k) => k,
         None => {
             drop(map);
