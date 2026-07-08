@@ -145,6 +145,22 @@ pub fn run() {
                 }
             });
 
+            // Permission popup coordinator: serialize popups into a single
+            // queue and dismiss each as soon as its request is resolved on any
+            // surface (popup submit, IM reply, timeout, or native CC terminal).
+            let popup_queue = window::popup_queue::PopupQueue::new();
+            let session_states: window::popup_queue::SessionStates =
+                Arc::new(Mutex::new(HashMap::new()));
+            {
+                let pq = popup_queue.clone();
+                let coord_handle = handle.clone();
+                let coord_waiters = permission_waiters.clone();
+                let coord_states = session_states.clone();
+                tauri::async_runtime::spawn(async move {
+                    pq.run(coord_handle, coord_waiters, coord_states).await;
+                });
+            }
+
             // IM message dispatch (all platforms → Engine)
             {
                 let engine_for_im = engine.clone();
@@ -153,11 +169,6 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     while let Some(msg) = im_rx.recv().await {
                         tracing::info!("IM message received: platform={} chat_id={} text={}", msg.platform, msg.chat_id, msg.text);
-                        let is_permission_cmd = {
-                            let t = msg.text.trim().to_lowercase();
-                            t == "/allow" || t == "/always" || t == "/deny"
-                                || t.starts_with("/answer")
-                        };
                         let eng = engine_for_im.lock().await;
                         eng.handle_im_message(msg).await;
                         let binding_change = eng.last_binding_change.lock().unwrap().take();
@@ -166,11 +177,6 @@ pub fn run() {
                             let _ = handle_for_im.emit("binding-changed", serde_json::json!({
                                 "session_id": session_id,
                             }));
-                        }
-                        if is_permission_cmd {
-                            if let Some(win) = handle_for_im.get_webview_window("permission") {
-                                let _ = win.close();
-                            }
                         }
                     }
                 });
@@ -193,6 +199,7 @@ pub fn run() {
             let engine_for_hooks = engine.clone();
             let agent_chat_ids_for_hooks = agent_chat_ids.clone();
             let permission_waiters_for_hooks = permission_waiters.clone();
+            let popup_queue_for_hooks = popup_queue.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = hook_rx.recv().await {
                     // Auto-bind active session only on events that signal the
@@ -234,9 +241,12 @@ pub fn run() {
                             "input": input,
                             "request_id": request_id,
                         }));
-                        let _ = window::show_permission_popup(
-                            &handle_for_hooks, session_id, tool, input, request_id,
-                        );
+                        popup_queue_for_hooks.enqueue(window::popup_queue::PopupItem {
+                            request_id: request_id.clone(),
+                            session_id: session_id.clone(),
+                            tool: tool.clone(),
+                            input: input.clone(),
+                        }).await;
                         let has_always = permission_waiters_for_hooks.lock().await
                             .get(request_id)
                             .map(|e| !e.suggestions.is_empty())
@@ -253,9 +263,12 @@ pub fn run() {
                             "input": input,
                             "request_id": request_id,
                         }));
-                        let _ = window::show_permission_popup(
-                            &handle_for_hooks, session_id, tool, input, request_id,
-                        );
+                        popup_queue_for_hooks.enqueue(window::popup_queue::PopupItem {
+                            request_id: request_id.clone(),
+                            session_id: session_id.clone(),
+                            tool: tool.clone(),
+                            input: input.clone(),
+                        }).await;
                         let card = build_permission_card(tool, input, false);
                         let eng = engine_for_hooks.lock().await;
                         eng.forward_card_to_platforms("claude-code", session_id, card).await;
@@ -298,9 +311,12 @@ pub fn run() {
                             "input": input,
                             "request_id": request_id,
                         }));
-                        let _ = window::show_permission_popup(
-                            &handle_for_hooks, session_id, tool, input, request_id,
-                        );
+                        popup_queue_for_hooks.enqueue(window::popup_queue::PopupItem {
+                            request_id: request_id.clone(),
+                            session_id: session_id.clone(),
+                            tool: tool.clone(),
+                            input: input.clone(),
+                        }).await;
                         let card = build_permission_card(tool, input, false);
                         let eng = engine_for_hooks.lock().await;
                         eng.forward_card_to_platforms("pi", session_id, card).await;
@@ -381,6 +397,7 @@ pub fn run() {
 
             let engine_for_events = engine.clone();
             let handle_for_events = handle.clone();
+            let session_states_for_events = session_states.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = agent_rx.recv().await {
                     let is_output = matches!(&event, AgentEvent::Output { .. });
@@ -389,6 +406,9 @@ pub fn run() {
                     } else {
                         None
                     };
+                    if let AgentEvent::StateChange { ref session_id, ref state } = event {
+                        session_states_for_events.lock().await.insert(session_id.clone(), state.clone());
+                    }
                     let eng = engine_for_events.lock().await;
                     eng.handle_agent_event(event).await;
                     drop(eng);

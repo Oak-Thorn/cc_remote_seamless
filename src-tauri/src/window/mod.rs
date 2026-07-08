@@ -1,6 +1,8 @@
 use tauri::{AppHandle, Emitter, Manager, WebviewWindowBuilder, WebviewUrl};
 use tracing::info;
 
+pub mod popup_queue;
+
 fn url_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 2);
     for b in s.bytes() {
@@ -16,15 +18,29 @@ fn url_encode(s: &str) -> String {
     out
 }
 
-pub fn show_permission_popup(
+pub async fn show_permission_popup(
     app: &AppHandle,
     session_id: &str,
     tool: &str,
     input: &str,
     request_id: &str,
 ) -> Result<(), String> {
+    // A previous popup may still be open. `close()` only requests a close and
+    // is processed asynchronously on the main event loop, so building a new
+    // window with the same "permission" label immediately afterwards races the
+    // teardown and fails with "a window with label `permission` already
+    // exists" — which left no popup at all. Use `destroy()` (frees the label
+    // without a close-request round-trip) and then wait until the label is
+    // actually gone before rebuilding.
     if let Some(win) = app.get_webview_window("permission") {
-        let _ = win.close();
+        let _ = win.destroy();
+        const MAX_WAIT_MS: u64 = 1000;
+        const POLL_MS: u64 = 20;
+        let mut waited = 0;
+        while app.get_webview_window("permission").is_some() && waited < MAX_WAIT_MS {
+            tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
+            waited += POLL_MS;
+        }
     }
 
     // Only the request_id goes in the URL. Tool/session/input are fetched by

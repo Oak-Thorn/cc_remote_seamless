@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use std::sync::Mutex;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
-use tracing::{info, error};
+use tokio::sync::Mutex as AsyncMutex;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Serialize)]
 struct SidecarCommand {
@@ -36,14 +37,17 @@ struct SidecarEvent {
     reason: Option<String>,
     message: Option<String>,
 }
-
 pub struct FeishuPlatform {
     id: String,
     app_id: String,
     app_secret: String,
     sidecar_path: String,
     stdin_tx: Mutex<Option<mpsc::UnboundedSender<String>>>,
+    child: Mutex<Option<Child>>,
     message_senders: Mutex<Vec<MessageSender>>,
+    // Serializes (re)connect attempts so concurrent sends never spawn
+    // duplicate sidecar processes.
+    reconnect_lock: AsyncMutex<()>,
 }
 
 impl FeishuPlatform {
@@ -54,7 +58,9 @@ impl FeishuPlatform {
             app_secret: app_secret.to_string(),
             sidecar_path: sidecar_path.to_string(),
             stdin_tx: Mutex::new(None),
+            child: Mutex::new(None),
             message_senders: Mutex::new(vec![]),
+            reconnect_lock: AsyncMutex::new(()),
         }
     }
 
@@ -65,27 +71,63 @@ impl FeishuPlatform {
         line.push('\n');
         tx.send(line).map_err(|e| e.to_string())
     }
-
-    pub fn send_card(&self, chat_id: &str, card: serde_json::Value) -> Result<(), String> {
-        info!("Feishu send_card: chat_id={}", chat_id);
-        self.send_command(SidecarCommand {
-            cmd_type: "send_card".into(),
-            app_id: None,
-            app_secret: None,
-            chat_id: Some(chat_id.to_string()),
-            text: None,
-            card: Some(card),
-        })
+    /// True when the sidecar process is running and its stdin pipe is open.
+    fn is_healthy(&self) -> bool {
+        let tx_open = self
+            .stdin_tx
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|tx| !tx.is_closed())
+            .unwrap_or(false);
+        if !tx_open {
+            return false;
+        }
+        let mut guard = self.child.lock().unwrap();
+        match guard.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        }
     }
-}
 
-#[async_trait::async_trait]
-impl IMPlatform for FeishuPlatform {
-    fn id(&self) -> &str {
-        &self.id
+    /// Ensure a live sidecar connection exists, reconnecting if it died.
+    async fn ensure_connected(&self) -> Result<(), String> {
+        if self.is_healthy() {
+            return Ok(());
+        }
+        let _lock = self.reconnect_lock.lock().await;
+        // Re-check under the lock: another task may have just reconnected.
+        if self.is_healthy() {
+            return Ok(());
+        }
+        warn!("Feishu sidecar unhealthy, reconnecting");
+        self.spawn_sidecar()
     }
 
-    async fn connect(&self) -> Result<(), String> {
+    /// Send a command, reconnecting once and retrying if the pipe is broken.
+    async fn dispatch<F>(&self, build: F) -> Result<(), String>
+    where
+        F: Fn() -> SidecarCommand,
+    {
+        self.ensure_connected().await?;
+        if let Err(e) = self.send_command(build()) {
+            warn!("Feishu send failed ({}); reconnecting and retrying once", e);
+            {
+                let _lock = self.reconnect_lock.lock().await;
+                self.spawn_sidecar()?;
+            }
+            return self.send_command(build());
+        }
+        Ok(())
+    }
+    /// Spawn (or respawn) the sidecar process and wire up its I/O tasks.
+    fn spawn_sidecar(&self) -> Result<(), String> {
+        // Tear down any stale child/pipe first to avoid orphaned processes.
+        if let Some(mut old) = self.child.lock().unwrap().take() {
+            let _ = old.start_kill();
+        }
+        *self.stdin_tx.lock().unwrap() = None;
+
         let mut child = Command::new(&self.sidecar_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -97,7 +139,6 @@ impl IMPlatform for FeishuPlatform {
         let stdout = child.stdout.take().unwrap();
 
         let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
-
         tokio::spawn(async move {
             let mut stdin = stdin;
             while let Some(line) = stdin_rx.recv().await {
@@ -106,8 +147,6 @@ impl IMPlatform for FeishuPlatform {
                 }
             }
         });
-
-        *self.stdin_tx.lock().unwrap() = Some(stdin_tx);
 
         let senders = self.message_senders.lock().unwrap().clone();
         let platform_id = self.id.clone();
@@ -142,6 +181,9 @@ impl IMPlatform for FeishuPlatform {
             }
         });
 
+        *self.child.lock().unwrap() = Some(child);
+        *self.stdin_tx.lock().unwrap() = Some(stdin_tx);
+
         self.send_command(SidecarCommand {
             cmd_type: "connect".into(),
             app_id: Some(self.app_id.clone()),
@@ -149,21 +191,31 @@ impl IMPlatform for FeishuPlatform {
             chat_id: None,
             text: None,
             card: None,
-        })?;
+        })
+    }
+}
+#[async_trait::async_trait]
+impl IMPlatform for FeishuPlatform {
+    fn id(&self) -> &str {
+        &self.id
+    }
 
-        Ok(())
+    async fn connect(&self) -> Result<(), String> {
+        self.spawn_sidecar()
     }
 
     async fn send_text(&self, chat_id: &str, text: &str) -> Result<(), String> {
         info!("Feishu send_text: chat_id={} text_len={}", chat_id, text.len());
-        let result = self.send_command(SidecarCommand {
-            cmd_type: "send_text".into(),
-            app_id: None,
-            app_secret: None,
-            chat_id: Some(chat_id.to_string()),
-            text: Some(text.to_string()),
-            card: None,
-        });
+        let result = self
+            .dispatch(|| SidecarCommand {
+                cmd_type: "send_text".into(),
+                app_id: None,
+                app_secret: None,
+                chat_id: Some(chat_id.to_string()),
+                text: Some(text.to_string()),
+                card: None,
+            })
+            .await;
         match &result {
             Ok(()) => info!("Feishu send_text command queued successfully"),
             Err(e) => error!("Feishu send_text command failed: {}", e),
@@ -172,7 +224,16 @@ impl IMPlatform for FeishuPlatform {
     }
 
     async fn send_card(&self, chat_id: &str, card: serde_json::Value) -> Result<(), String> {
-        self.send_card(chat_id, card)
+        info!("Feishu send_card: chat_id={}", chat_id);
+        self.dispatch(|| SidecarCommand {
+            cmd_type: "send_card".into(),
+            app_id: None,
+            app_secret: None,
+            chat_id: Some(chat_id.to_string()),
+            text: None,
+            card: Some(card.clone()),
+        })
+        .await
     }
 
     fn subscribe(&self, sender: MessageSender) {
@@ -189,5 +250,9 @@ impl IMPlatform for FeishuPlatform {
             card: None,
         });
         *self.stdin_tx.lock().unwrap() = None;
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.start_kill();
+        }
     }
 }
+

@@ -142,7 +142,13 @@ impl IMPlatform for TelegramPlatform {
     }
 
     async fn send_text(&self, chat_id: &str, text: &str) -> Result<(), String> {
-        let client = reqwest::Client::new();
+        // Bounded timeout: send happens inside the hook event loop (a single
+        // serial task). Without a cap, a stalled Telegram request would freeze
+        // the whole loop — blocking later permission popups from ever showing.
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("Telegram client build failed: {}", e))?;
         let url = self.api_url("sendMessage");
         let resp = client.post(&url)
             .json(&serde_json::json!({
