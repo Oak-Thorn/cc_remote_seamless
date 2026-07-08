@@ -325,6 +325,44 @@ pub async fn open_settings(app: AppHandle) -> Result<(), String> {
     crate::window::open_settings_window(&app)
 }
 
+/// Walk up the process tree from `pid` to find the GUI terminal app hosting it.
+/// Returns a normalized name ("iTerm", "Terminal") or None if unrecognized
+/// (e.g. tmux, ssh, or an unsupported terminal). Uses `command=` (full path)
+/// rather than `comm=` because the latter truncates the executable name.
+#[cfg(target_os = "macos")]
+async fn detect_terminal_app(pid: i32) -> Option<String> {
+    let mut cur = pid;
+    for _ in 0..16 {
+        let out = tokio::process::Command::new("ps")
+            .args(["-p", &cur.to_string(), "-o", "ppid=,command="])
+            .output()
+            .await
+            .ok()?;
+        let line = String::from_utf8_lossy(&out.stdout);
+        let line = line.trim_start();
+        if line.is_empty() {
+            return None;
+        }
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let ppid: i32 = parts.next()?.trim().parse().ok()?;
+        let cmd = parts.next().unwrap_or("").to_lowercase();
+        if cmd.contains("iterm") {
+            return Some("iTerm".to_string());
+        }
+        if cmd.contains("terminal.app") {
+            return Some("Terminal".to_string());
+        }
+        if cmd.contains("warp.app") {
+            return Some("Warp".to_string());
+        }
+        if ppid <= 1 {
+            return None;
+        }
+        cur = ppid;
+    }
+    None
+}
+
 #[tauri::command]
 pub async fn open_terminal(session_id: String) -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|e| format!("HOME not set: {}", e))?;
@@ -365,12 +403,34 @@ pub async fn open_terminal(session_id: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let tty_path = format!("/dev/{}", tty_name);
-        let script = format!(
-            r#"tell application "Terminal"
+        // The session usually runs in iTerm2 or Terminal.app; script whichever
+        // actually hosts it (matched by tty) instead of blindly activating
+        // Terminal.app, which would pop an empty new window for iTerm users.
+        let host = detect_terminal_app(pid).await;
+        let script = match host.as_deref() {
+            Some("iTerm") => format!(
+                r#"tell application "iTerm2"
     activate
     repeat with w in windows
         repeat with t in tabs of w
-            if tty of t is "{}" then
+            repeat with s in sessions of t
+                if tty of s is "{tty}" then
+                    select w
+                    select t
+                    return
+                end if
+            end repeat
+        end repeat
+    end repeat
+end tell"#,
+                tty = tty_path
+            ),
+            Some("Terminal") => format!(
+                r#"tell application "Terminal"
+    activate
+    repeat with w in windows
+        repeat with t in tabs of w
+            if tty of t is "{tty}" then
                 set selected of t to true
                 set index of w to 1
                 return
@@ -378,14 +438,28 @@ pub async fn open_terminal(session_id: String) -> Result<(), String> {
         end repeat
     end repeat
 end tell"#,
-            tty_path
-        );
-        tokio::process::Command::new("osascript")
+                tty = tty_path
+            ),
+            other => {
+                return Err(format!(
+                    "无法精确定位该 session 的终端（宿主={}，tty={}）。目前仅支持 Terminal.app 与 iTerm2，请手动切换。",
+                    other.unwrap_or("未知"),
+                    tty_path
+                ));
+            }
+        };
+        let out = tokio::process::Command::new("osascript")
             .arg("-e")
             .arg(&script)
             .output()
             .await
             .map_err(|e| format!("osascript failed: {}", e))?;
+        if !out.status.success() {
+            return Err(format!(
+                "osascript failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
     }
     Ok(())
 }
