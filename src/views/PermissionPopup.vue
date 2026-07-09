@@ -204,7 +204,7 @@ async function closeWindow() {
 async function openSettings() {
   const existing = await WebviewWindow.getByLabel("main");
   if (existing) { await existing.setFocus(); }
-  else { new WebviewWindow("main", { url: "/?view=main", title: "CC Remote Seamless", width: 600, height: 400 }); }
+  else { new WebviewWindow("main", { url: "/?view=main", title: "CC Remote Seamless", width: 600, height: 400, minWidth: 360, minHeight: 280, resizable: true }); }
 }
 </script>
 

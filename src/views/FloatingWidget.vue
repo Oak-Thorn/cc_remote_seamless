@@ -21,10 +21,18 @@ let unlistenMessages: UnlistenFn | null = null;
 let unlistenBinding: UnlistenFn | null = null;
 let unlistenIcon: UnlistenFn | null = null;
 let collapseTimer: number | null = null;
+let unlistenResize: UnlistenFn | null = null;
 
-const EXPANDED_WIDTH = 330;
-const EXPANDED_HEIGHT = 225;
 const COLLAPSED_SIZE = 54;
+const DEFAULT_EXPANDED_WIDTH = 330;
+const DEFAULT_EXPANDED_HEIGHT = 225;
+const MIN_EXPANDED_WIDTH = 240;
+const MIN_EXPANDED_HEIGHT = 160;
+// Persisted across collapse/expand and updated after a manual drag-resize, so
+// the size the user picks survives the auto-collapse instead of snapping back.
+const expandedWidth = ref(DEFAULT_EXPANDED_WIDTH);
+const expandedHeight = ref(DEFAULT_EXPANDED_HEIGHT);
+let scaleFactor = 1;
 
 function scheduleCollapse() {
   if (collapseTimer) clearTimeout(collapseTimer);
@@ -38,10 +46,23 @@ function expand() {
   if (expandLocked) return;
   if (collapseTimer) clearTimeout(collapseTimer);
   collapsed.value = false;
-  resizeWindow(EXPANDED_WIDTH, EXPANDED_HEIGHT);
+  resizeWindow(expandedWidth.value, expandedHeight.value);
 }
 
 function onMouseLeave() {
+  scheduleCollapse();
+}
+
+/// Start a native drag-resize from the bottom-left grip. Anchored SouthWest so
+/// the top-right corner stays put and the widget keeps hugging the screen edge.
+async function startResize(e: MouseEvent) {
+  e.preventDefault();
+  if (collapseTimer) clearTimeout(collapseTimer);
+  try {
+    await getCurrentWindow().startResizeDragging("SouthWest");
+  } catch (err) {
+    console.warn("[FloatingWidget] startResizeDragging failed:", err);
+  }
   scheduleCollapse();
 }
 
@@ -49,7 +70,7 @@ async function resizeWindow(w: number, h: number) {
   try {
     const win = getCurrentWindow();
     const monitor = await currentMonitor();
-    const scaleFactor = monitor?.scaleFactor || 1;
+    scaleFactor = monitor?.scaleFactor || scaleFactor;
     const pw = Math.round(w * scaleFactor);
     const ph = Math.round(h * scaleFactor);
     await win.setSize(new PhysicalSize(pw, ph));
@@ -83,6 +104,12 @@ onMounted(async () => {
   unlistenIcon = await listen<FloatingIcon>("floating-icon-changed", (event) => {
     settingsStore.setFloatingIcon(event.payload);
   });
+  // Capture manual drag-resizes so the chosen size persists across collapse.
+  unlistenResize = await getCurrentWindow().onResized(({ payload }) => {
+    if (collapsed.value) return;
+    expandedWidth.value = Math.max(MIN_EXPANDED_WIDTH, Math.round(payload.width / scaleFactor));
+    expandedHeight.value = Math.max(MIN_EXPANDED_HEIGHT, Math.round(payload.height / scaleFactor));
+  });
   await loadCustomIconSvg();
 
   try {
@@ -110,6 +137,7 @@ onUnmounted(() => {
   unlistenMessages?.();
   unlistenBinding?.();
   unlistenIcon?.();
+  unlistenResize?.();
 });
 
 watch(selected, (id) => {
@@ -188,13 +216,14 @@ watch(() => settingsStore.floatingIcon, () => loadCustomIconSvg());
         <span class="msg-text">{{ shortContent(m.text) }}</span>
       </div>
     </div>
+    <div class="resize-grip" @mousedown="startResize" title="Drag to resize"></div>
   </div>
 </template>
 
 <style scoped>
 .collapsed-dot { width: 54px; height: 54px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.2s; padding: 6px; }
 .collapsed-dot:hover { transform: scale(1.15); }
-.float-widget { background: #ffffff; border-radius: 10px; border: 1px solid #e2e8f0; overflow: hidden; display: flex; flex-direction: column; min-height: 80px; max-height: 450px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.float-widget { position: relative; height: 100vh; background: #ffffff; border-radius: 10px; border: 1px solid #e2e8f0; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 .titlebar { height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; background: #f8fafc; cursor: grab; user-select: none; -webkit-user-select: none; border-bottom: 1px solid #e2e8f0; flex-shrink: 0; }
 .titlebar-text { font-size: 12px; font-weight: 500; color: #94a3b8; }
 .titlebar-buttons { display: flex; gap: 4px; }
@@ -208,9 +237,11 @@ watch(() => settingsStore.floatingIcon, () => loadCustomIconSvg());
 .radio { width: 14px; height: 14px; accent-color: #3b82f6; margin: 0; }
 .session-name { font-weight: 600; font-size: 13px; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .empty { font-size: 13px; color: #94a3b8; }
-.message-panel { border-top: 1px solid #e2e8f0; padding: 8px 14px; overflow-y: auto; flex: 1; max-height: 240px; }
+.message-panel { border-top: 1px solid #e2e8f0; padding: 8px 14px; overflow-y: auto; flex: 1; }
 .msg-empty { font-size: 12px; color: #94a3b8; padding: 4px 0; }
 .msg-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 12px; }
 .msg-source { font-weight: 600; color: #64748b; flex-shrink: 0; min-width: 40px; }
 .msg-text { color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resize-grip { position: absolute; left: 0; bottom: 0; width: 16px; height: 16px; cursor: nesw-resize; z-index: 10; background: linear-gradient(225deg, transparent 0 8px, #cbd5e1 8px 10px, transparent 10px 12px, #cbd5e1 12px 14px, transparent 14px); }
+.resize-grip:hover { background: linear-gradient(225deg, transparent 0 8px, #94a3b8 8px 10px, transparent 10px 12px, #94a3b8 12px 14px, transparent 14px); }
 </style>
