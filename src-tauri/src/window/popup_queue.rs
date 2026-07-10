@@ -57,6 +57,7 @@ impl PopupQueue {
     /// CC-terminal answer) and show the next still-pending request.
     pub async fn run(self, app: AppHandle, waiters: PermissionWaiters, states: SessionStates) {
         const TICK_MS: u64 = 150;
+        tracing::info!("Popup coordinator started");
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(TICK_MS)).await;
             self.tick(&app, &waiters, &states).await;
@@ -81,6 +82,10 @@ impl PopupQueue {
                 inner.armed && matches!(&state, Some(s) if *s != SessionState::WaitingPermission);
             let resolved = !waiter_pending || left_permission || !window_open;
             if !resolved {
+                tracing::info!(
+                    "Coordinator: current {} still on screen (waiter_pending={} window_open={} state={:?})",
+                    cur.request_id, waiter_pending, window_open, state
+                );
                 return;
             }
             inner.current = None;
@@ -115,6 +120,10 @@ impl PopupQueue {
             break candidate;
         };
 
+        tracing::info!(
+            "Coordinator: about to show popup request_id={} tool={}",
+            next.request_id, next.tool
+        );
         if let Err(e) = super::show_permission_popup(
             app, &next.session_id, &next.tool, &next.input, &next.request_id,
         )

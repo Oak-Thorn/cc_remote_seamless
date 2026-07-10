@@ -168,7 +168,7 @@ pub fn run() {
                 let mut im_rx = im_rx;
                 tauri::async_runtime::spawn(async move {
                     while let Some(msg) = im_rx.recv().await {
-                        tracing::info!("IM message received: platform={} chat_id={} text={}", msg.platform, msg.chat_id, msg.text);
+                        tracing::info!("IM message received (im->app): platform={} chat_id={} text={}", msg.platform, msg.chat_id, msg.text);
                         let eng = engine_for_im.lock().await;
                         eng.handle_im_message(msg).await;
                         let binding_change = eng.last_binding_change.lock().unwrap().take();

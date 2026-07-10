@@ -119,6 +119,49 @@ struct HookState {
     permission_waiters: PermissionWaiters,
 }
 
+/// RAII cleanup for a pending permission/elicitation waiter.
+///
+/// While CC is genuinely waiting on our decision the hook's HTTP connection
+/// stays open. Once CC resolves the request some other way — the user answers
+/// in the native terminal prompt, interrupts, or the process dies — CC drops
+/// the connection and axum drops this handler future. Without this guard the
+/// `tx` waiter would linger in the map, so the popup coordinator would keep
+/// `waiter_pending == true` and never dismiss the now-orphaned popup (until the
+/// 590s timeout). Dropping while still `armed` removes the waiter so the
+/// coordinator sees `!waiter_pending` and dismisses the popup on its next tick.
+struct WaiterCleanup {
+    waiters: PermissionWaiters,
+    request_id: String,
+    armed: bool,
+}
+
+impl WaiterCleanup {
+    fn new(waiters: PermissionWaiters, request_id: String) -> Self {
+        Self { waiters, request_id, armed: true }
+    }
+    /// Call once the request has been resolved normally (decision received or
+    /// timeout already removed it) so the Drop below becomes a no-op.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for WaiterCleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let waiters = self.waiters.clone();
+        let request_id = std::mem::take(&mut self.request_id);
+        // Drop is sync; hop onto the runtime to touch the async mutex.
+        tokio::spawn(async move {
+            if waiters.lock().await.remove(&request_id).is_some() {
+                info!("Permission waiter {} abandoned (client disconnected), removed", request_id);
+            }
+        });
+    }
+}
+
 pub async fn start_hook_server(port: u16, tx: HookEventSender, permission_waiters: PermissionWaiters) -> Result<(), String> {
     let state = Arc::new(HookState { tx, permission_waiters });
 
@@ -330,15 +373,20 @@ async fn handle_elicitation(
         .cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
     state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![], input: tool_input, tool: tool.clone(), session_id: session_id.clone(), pending_answers: HashMap::new() });
+    let mut cleanup = WaiterCleanup::new(state.permission_waiters.clone(), request_id.clone());
 
     let _ = state.tx.send(HookEvent::Elicitation { session_id: session_id.clone(), tool: tool.clone(), input, cwd, request_id: request_id.clone() });
 
     info!("Elicitation waiting: tool={} id={}", tool, request_id);
 
     let decision = match tokio::time::timeout(std::time::Duration::from_secs(590), rx).await {
-        Ok(Ok(response)) => response,
+        Ok(Ok(response)) => {
+            cleanup.disarm();
+            response
+        }
         _ => {
             state.permission_waiters.lock().await.remove(&request_id);
+            cleanup.disarm();
             PermissionResponse::deny("Timeout")
         }
     };
@@ -396,6 +444,7 @@ async fn handle_permission(
         .cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
     state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions, input: tool_input, tool: tool.clone(), session_id: session_id.clone(), pending_answers: HashMap::new() });
+    let mut cleanup = WaiterCleanup::new(state.permission_waiters.clone(), request_id.clone());
 
     let _ = state.tx.send(HookEvent::PermissionRequest {
         session_id,
@@ -408,9 +457,14 @@ async fn handle_permission(
     info!("Permission request waiting: tool={} id={}", tool, request_id);
 
     let decision = match tokio::time::timeout(std::time::Duration::from_secs(590), rx).await {
-        Ok(Ok(response)) => response,
+        Ok(Ok(response)) => {
+            // respond_permission already removed the entry.
+            cleanup.disarm();
+            response
+        }
         _ => {
             state.permission_waiters.lock().await.remove(&request_id);
+            cleanup.disarm();
             PermissionResponse::deny("Timeout")
         }
     };
@@ -498,6 +552,7 @@ async fn handle_pi_permission(
     let tool_input = raw.get("tool_input").cloned().unwrap_or(serde_json::Value::Null);
     let (tx, rx) = oneshot::channel();
     state.permission_waiters.lock().await.insert(request_id.clone(), PermissionWaiterEntry { sender: tx, suggestions: vec![], input: tool_input, tool: tool.clone(), session_id: session_id.clone(), pending_answers: HashMap::new() });
+    let mut cleanup = WaiterCleanup::new(state.permission_waiters.clone(), request_id.clone());
 
     let _ = state.tx.send(HookEvent::PiPermissionRequest {
         session_id,
@@ -508,9 +563,13 @@ async fn handle_pi_permission(
     });
 
     let decision = match tokio::time::timeout(std::time::Duration::from_secs(590), rx).await {
-        Ok(Ok(response)) => response,
+        Ok(Ok(response)) => {
+            cleanup.disarm();
+            response
+        }
         _ => {
             state.permission_waiters.lock().await.remove(&request_id);
+            cleanup.disarm();
             PermissionResponse::deny("Timeout")
         }
     };

@@ -332,6 +332,7 @@ impl AgentConnector for ClaudeCodeConnector {
     }
 
     async fn inject_input(&self, session_id: &str, text: &str) -> Result<(), String> {
+        info!("Inject to CC (app->agent): session={} text_len={}", session_id, text.len());
         {
             let sessions = self.sessions.read().unwrap();
             if !sessions.contains_key(session_id) {

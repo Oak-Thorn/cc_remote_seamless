@@ -173,6 +173,7 @@ impl AgentConnector for PiConnector {
     }
 
     async fn inject_input(&self, session_id: &str, text: &str) -> Result<(), String> {
+        tracing::info!("Inject to pi (app->agent): session={} text_len={}", session_id, text.len());
         let (port, pid) = {
             let sessions = self.sessions.read().unwrap();
             let s = sessions.get(session_id)

@@ -96,6 +96,11 @@ onMounted(async () => {
   msgStore.loadAll();
   invoke("set_sound_preference", { kind: "idle", name: settingsStore.idleSound }).catch(() => {});
   invoke("set_sound_preference", { kind: "permission", name: settingsStore.permissionSound }).catch(() => {});
+  // Backend logging starts disabled every launch (logging::init(false)); the
+  // persisted toggle lives only in localStorage, so push it to the backend on
+  // startup — otherwise "log to file" reads as on in Settings but never saves
+  // until the user happens to open the Settings window.
+  settingsStore.syncLogToFile();
   unlisten = await listen("sessions-updated", () => store.refresh());
   unlistenMessages = await listen("messages-updated", () => msgStore.loadAll());
   unlistenBinding = await listen<{ session_id: string }>("binding-changed", (event) => {

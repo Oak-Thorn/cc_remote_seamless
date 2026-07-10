@@ -114,7 +114,7 @@ impl Engine {
                 if let Some(chat_id) = self.platform_chat_ids.get(pid) {
                     let binding = self.bindings.get(chat_id);
                     if binding.as_ref().map(|b| b.session_id.as_str()) == Some(session_id) {
-                        tracing::info!("Forwarding to platform={} chat_id={}", pid, chat_id);
+                        tracing::info!("Forwarding to platform={} chat_id={} (app->im)", pid, chat_id);
                         if let Err(e) = platform.send_text(chat_id, &labeled).await {
                             warn!("Forward to {} failed: {}", pid, e);
                         }
@@ -131,6 +131,7 @@ impl Engine {
                 if let Some(chat_id) = self.platform_chat_ids.get(pid) {
                     let binding = self.bindings.get(chat_id);
                     if binding.as_ref().map(|b| b.session_id.as_str()) == Some(session_id) {
+                        tracing::info!("Forwarding card to platform={} chat_id={} (app->im)", pid, chat_id);
                         if let Err(e) = platform.send_card(chat_id, card.clone()).await {
                             warn!("Forward card to {} failed: {}", pid, e);
                         }
@@ -219,7 +220,7 @@ impl Engine {
     }
 
     pub async fn handle_agent_event(&self, event: AgentEvent) {
-        info!("Received agent event: {:?}", event);
+        info!("Received agent event (agent->app): {:?}", event);
         match event {
             AgentEvent::Output { ref session_id, ref text } => {
                 let now = chrono::Utc::now().timestamp();

@@ -56,13 +56,10 @@ pub async fn show_permission_popup(
         .title("Permission")
         .inner_size(420.0, height)
         .always_on_top(true)
-        // Do NOT steal focus: the user is often typing in another window when
-        // the popup appears, and grabbing key status would drop their input.
-        // The popup stays visible via always_on_top. `accept_first_mouse(true)`
-        // lets the first click on the still-unfocused window pass through to the
-        // radio instead of being swallowed just to make the window key, so the
-        // control is still usable in a single click without focusing on build.
-        .focused(false)
+        // On macOS an unfocused window swallows its first click just to become
+        // key, so the radio needed two clicks. Request focus on build and let
+        // the first mouse-down pass through to the webview content.
+        .focused(true)
         .accept_first_mouse(true)
         .resizable(false)
         .decorations(false)
