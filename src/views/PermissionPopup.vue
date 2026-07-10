@@ -196,11 +196,6 @@ function submitAnswer() {
   }
 }
 
-async function closeWindow() {
-  const win = getCurrentWebviewWindow();
-  await win.close();
-}
-
 async function openSettings() {
   const existing = await WebviewWindow.getByLabel("main");
   if (existing) { await existing.setFocus(); }
@@ -214,7 +209,6 @@ async function openSettings() {
       <span class="titlebar-text" data-tauri-drag-region>CC Remote Seamless</span>
       <div class="titlebar-actions">
         <button class="titlebar-btn" title="Settings" @click="openSettings">⚙</button>
-        <button class="titlebar-btn close" title="Close" @click="closeWindow">✕</button>
       </div>
     </div>
 
@@ -336,7 +330,6 @@ async function openSettings() {
 .titlebar-actions { margin-left: auto; display: flex; gap: 4px; }
 .titlebar-btn { width: 22px; height: 22px; border: none; border-radius: 4px; background: transparent; color: #64748b; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .titlebar-btn:hover { background: #e2e8f0; }
-.titlebar-btn.close:hover { background: #fee2e2; color: #ef4444; }
 
 .body {
   flex: 1;

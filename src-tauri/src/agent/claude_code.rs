@@ -239,32 +239,53 @@ impl ClaudeCodeConnector {
                     };
                     let Some(file_state) = file_state else { continue };
 
-                    let sessions = self.sessions.read().unwrap();
-                    if let Some(conn) = sessions.get(&session_id) {
-                        if conn.state == SessionState::Busy && file_state == SessionState::Idle {
-                            let age = conn.last_event.elapsed();
-                            if age.as_secs() < RECONCILE_HOOK_GUARD_SECS {
-                                drop(sessions);
-                                tracing::info!(
-                                    "Reconcile: session {} file says idle but last hook event was {:?} ago (< {}s guard), keeping Busy",
-                                    session_id, age, RECONCILE_HOOK_GUARD_SECS
-                                );
-                                continue;
-                            }
-                            drop(sessions);
-                            tracing::info!(
-                                "Reconcile: session {} was Busy but file says idle (last hook {:?} ago), updating to Idle",
-                                session_id, age
-                            );
-                            let cwd = info.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            self.update_state_from(&session_id, SessionState::Idle, cwd, "reconcile");
+                    let (cur_state, age) = {
+                        let sessions = self.sessions.read().unwrap();
+                        match sessions.get(&session_id) {
+                            Some(conn) => (Some(conn.state.clone()), conn.last_event.elapsed()),
+                            None => (None, std::time::Duration::ZERO),
                         }
-                    } else {
-                        drop(sessions);
+                    };
+
+                    let Some(cur_state) = cur_state else {
                         let cwd = info.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
                         tracing::info!("Reconcile: discovered new session {} (pid={}, status={:?})", session_id, pid, raw_status);
                         self.update_state_from(&session_id, file_state, cwd, "reconcile-discover");
+                        continue;
+                    };
+
+                    // Cases where the CC session file is ahead of our hook-driven state:
+                    //  - Busy -> Idle: CC finished without emitting a Stop hook.
+                    //  - WaitingPermission -> Busy/Idle: the permission was resolved
+                    //    outside our /permission hook (e.g. answered in CC's own
+                    //    terminal prompt). We never get a hook to leave WaitingPermission,
+                    //    so without this the popup coordinator keeps the popup on screen
+                    //    until the 590s waiter timeout.
+                    let went_idle = cur_state == SessionState::Busy && file_state == SessionState::Idle;
+                    let left_waiting = cur_state == SessionState::WaitingPermission
+                        && matches!(file_state, SessionState::Busy | SessionState::Idle);
+                    if !went_idle && !left_waiting {
+                        continue;
                     }
+                    // Guard against racing a just-arrived hook / a lagging file (the
+                    // file may still show the pre-permission "busy" right after we set
+                    // WaitingPermission). Only adopt the file state once ours has been
+                    // stable for the guard window; a genuinely-waiting session's file
+                    // reads "waiting" and is skipped above, so this cannot dismiss a
+                    // popup the user is still meant to answer.
+                    if age.as_secs() < RECONCILE_HOOK_GUARD_SECS {
+                        tracing::info!(
+                            "Reconcile: session {} file says {:?} but last hook {:?} ago (< {}s guard), keeping {:?}",
+                            session_id, file_state, age, RECONCILE_HOOK_GUARD_SECS, cur_state
+                        );
+                        continue;
+                    }
+                    tracing::info!(
+                        "Reconcile: session {} {:?} -> {:?} from file (last hook {:?} ago)",
+                        session_id, cur_state, file_state, age
+                    );
+                    let cwd = info.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    self.update_state_from(&session_id, file_state, cwd, "reconcile");
                 }
             }
         }

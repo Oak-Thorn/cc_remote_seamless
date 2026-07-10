@@ -82,10 +82,6 @@ impl PopupQueue {
                 inner.armed && matches!(&state, Some(s) if *s != SessionState::WaitingPermission);
             let resolved = !waiter_pending || left_permission || !window_open;
             if !resolved {
-                tracing::info!(
-                    "Coordinator: current {} still on screen (waiter_pending={} window_open={} state={:?})",
-                    cur.request_id, waiter_pending, window_open, state
-                );
                 return;
             }
             inner.current = None;
