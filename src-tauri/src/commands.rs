@@ -237,6 +237,13 @@ pub async fn set_log_to_file(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn set_auto_approve(enabled: bool) -> Result<(), String> {
+    crate::auto_approve::set_enabled(enabled);
+    tracing::info!("Auto-approve permissions set to {}", enabled);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn start_feishu_register(app: AppHandle) -> Result<(), String> {
     let script = app.path().resource_dir()
         .map(|d| d.join("../../scripts/feishu-register.mjs"))

@@ -21,6 +21,9 @@ export const useSettingsStore = defineStore("settings", () => {
     localStorage.getItem("permissionSound") || "Hero"
   );
   const logToFile = ref<boolean>(localStorage.getItem("logToFile") === "true");
+  const autoApprove = ref<boolean>(
+    localStorage.getItem("autoApprove") === "true"
+  );
   const availableSounds = ref<SoundInfo[]>([]);
   const soundsLoaded = ref(false);
 
@@ -75,11 +78,22 @@ export const useSettingsStore = defineStore("settings", () => {
     invoke("set_log_to_file", { enabled: logToFile.value }).catch(() => {});
   }
 
+  function setAutoApprove(enabled: boolean) {
+    autoApprove.value = enabled;
+    localStorage.setItem("autoApprove", String(enabled));
+    invoke("set_auto_approve", { enabled }).catch(() => {});
+  }
+
+  function syncAutoApprove() {
+    invoke("set_auto_approve", { enabled: autoApprove.value }).catch(() => {});
+  }
+
   return {
     floatingIcon, setFloatingIcon,
     idleSound, setIdleSound,
     permissionSound, setPermissionSound,
     logToFile, setLogToFile, syncLogToFile,
+    autoApprove, setAutoApprove, syncAutoApprove,
     availableSounds, soundsLoaded, loadAvailableSounds, reloadSounds,
   };
 });

@@ -6,6 +6,7 @@ pub mod pty;
 pub mod window;
 pub mod config;
 pub mod logging;
+pub mod auto_approve;
 mod commands;
 
 use agent::claude_code::ClaudeCodeConnector;
@@ -13,7 +14,7 @@ use agent::pi::PiConnector;
 use agent::{AgentConnector, AgentEvent};
 use config::PlatformConfig;
 use engine::Engine;
-use hook::server::{start_hook_server, HookEvent, PermissionWaiters};
+use hook::server::{start_hook_server, HookEvent, PermissionResponse, PermissionWaiters};
 use hook::installer::install_claude_hooks;
 use platform::feishu::FeishuPlatform;
 use platform::telegram::TelegramPlatform;
@@ -235,26 +236,33 @@ pub fn run() {
                     }
 
                     if let HookEvent::PermissionRequest { ref session_id, ref tool, ref input, ref request_id, .. } = event {
-                        let _ = handle_for_hooks.emit("permission-request", serde_json::json!({
-                            "session_id": session_id,
-                            "tool": tool,
-                            "input": input,
-                            "request_id": request_id,
-                        }));
-                        popup_queue_for_hooks.enqueue(window::popup_queue::PopupItem {
-                            request_id: request_id.clone(),
-                            session_id: session_id.clone(),
-                            tool: tool.clone(),
-                            input: input.clone(),
-                        }).await;
-                        let has_always = permission_waiters_for_hooks.lock().await
-                            .get(request_id)
-                            .map(|e| !e.suggestions.is_empty())
-                            .unwrap_or(false);
-                        let card = build_permission_card(tool, input, has_always);
-                        let eng = engine_for_hooks.lock().await;
-                        eng.forward_card_to_platforms("claude-code", session_id, card).await;
-                        drop(eng);
+                        if auto_approve::is_enabled() {
+                            if let Some(entry) = permission_waiters_for_hooks.lock().await.remove(request_id) {
+                                let _ = entry.sender.send(PermissionResponse::allow());
+                                tracing::info!("Auto-approved permission: tool={} id={}", tool, request_id);
+                            }
+                        } else {
+                            let _ = handle_for_hooks.emit("permission-request", serde_json::json!({
+                                "session_id": session_id,
+                                "tool": tool,
+                                "input": input,
+                                "request_id": request_id,
+                            }));
+                            popup_queue_for_hooks.enqueue(window::popup_queue::PopupItem {
+                                request_id: request_id.clone(),
+                                session_id: session_id.clone(),
+                                tool: tool.clone(),
+                                input: input.clone(),
+                            }).await;
+                            let has_always = permission_waiters_for_hooks.lock().await
+                                .get(request_id)
+                                .map(|e| !e.suggestions.is_empty())
+                                .unwrap_or(false);
+                            let card = build_permission_card(tool, input, has_always);
+                            let eng = engine_for_hooks.lock().await;
+                            eng.forward_card_to_platforms("claude-code", session_id, card).await;
+                            drop(eng);
+                        }
                     }
                     if let HookEvent::Elicitation { ref session_id, ref tool, ref input, ref request_id, .. } = event {
                         let _ = handle_for_hooks.emit("permission-request", serde_json::json!({
@@ -305,22 +313,29 @@ pub fn run() {
                         }
                     }
                     if let HookEvent::PiPermissionRequest { ref session_id, ref tool, ref input, ref request_id, .. } = event {
-                        let _ = handle_for_hooks.emit("permission-request", serde_json::json!({
-                            "session_id": session_id,
-                            "tool": tool,
-                            "input": input,
-                            "request_id": request_id,
-                        }));
-                        popup_queue_for_hooks.enqueue(window::popup_queue::PopupItem {
-                            request_id: request_id.clone(),
-                            session_id: session_id.clone(),
-                            tool: tool.clone(),
-                            input: input.clone(),
-                        }).await;
-                        let card = build_permission_card(tool, input, false);
-                        let eng = engine_for_hooks.lock().await;
-                        eng.forward_card_to_platforms("pi", session_id, card).await;
-                        drop(eng);
+                        if auto_approve::is_enabled() {
+                            if let Some(entry) = permission_waiters_for_hooks.lock().await.remove(request_id) {
+                                let _ = entry.sender.send(PermissionResponse::allow());
+                                tracing::info!("Auto-approved permission: tool={} id={}", tool, request_id);
+                            }
+                        } else {
+                            let _ = handle_for_hooks.emit("permission-request", serde_json::json!({
+                                "session_id": session_id,
+                                "tool": tool,
+                                "input": input,
+                                "request_id": request_id,
+                            }));
+                            popup_queue_for_hooks.enqueue(window::popup_queue::PopupItem {
+                                request_id: request_id.clone(),
+                                session_id: session_id.clone(),
+                                tool: tool.clone(),
+                                input: input.clone(),
+                            }).await;
+                            let card = build_permission_card(tool, input, false);
+                            let eng = engine_for_hooks.lock().await;
+                            eng.forward_card_to_platforms("pi", session_id, card).await;
+                            drop(eng);
+                        }
                     }
                     if let HookEvent::PiInput { ref session_id, ref text, .. } = event {
                         let eng = engine_for_hooks.lock().await;
@@ -440,6 +455,7 @@ pub fn run() {
             commands::get_log_dir,
             commands::open_log_dir,
             commands::set_log_to_file,
+            commands::set_auto_approve,
             commands::get_home_dir,
             commands::open_config_dir,
             commands::read_config_file,

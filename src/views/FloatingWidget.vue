@@ -101,6 +101,11 @@ onMounted(async () => {
   // startup — otherwise "log to file" reads as on in Settings but never saves
   // until the user happens to open the Settings window.
   settingsStore.syncLogToFile();
+  // Same rationale as logging: the auto-approve toggle is persisted only in
+  // localStorage and the backend flag defaults to off each launch, so push the
+  // stored value on startup — otherwise it wouldn't take effect until Settings
+  // is opened.
+  settingsStore.syncAutoApprove();
   unlisten = await listen("sessions-updated", () => store.refresh());
   unlistenMessages = await listen("messages-updated", () => msgStore.loadAll());
   unlistenBinding = await listen<{ session_id: string }>("binding-changed", (event) => {

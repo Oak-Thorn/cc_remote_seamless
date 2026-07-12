@@ -54,6 +54,11 @@ describe("useSettingsStore", () => {
       const store = useSettingsStore();
       expect(store.logToFile).toBe(false);
     });
+
+    it("has autoApprove default false", () => {
+      const store = useSettingsStore();
+      expect(store.autoApprove).toBe(false);
+    });
   });
 
   describe("setLogToFile", () => {
@@ -76,6 +81,38 @@ describe("useSettingsStore", () => {
       setActivePinia(createPinia());
       const store = useSettingsStore();
       expect(store.logToFile).toBe(true);
+    });
+  });
+
+  describe("setAutoApprove", () => {
+    it("updates the ref and persists to localStorage", () => {
+      const store = useSettingsStore();
+      store.setAutoApprove(true);
+      expect(store.autoApprove).toBe(true);
+      expect(localStorage.getItem("autoApprove")).toBe("true");
+    });
+
+    it("invokes backend with enabled flag", () => {
+      const store = useSettingsStore();
+      vi.mocked(invoke).mockClear();
+      store.setAutoApprove(true);
+      expect(invoke).toHaveBeenCalledWith("set_auto_approve", { enabled: true });
+    });
+
+    it("syncAutoApprove pushes the current value to the backend", () => {
+      localStorage.setItem("autoApprove", "true");
+      setActivePinia(createPinia());
+      const store = useSettingsStore();
+      vi.mocked(invoke).mockClear();
+      store.syncAutoApprove();
+      expect(invoke).toHaveBeenCalledWith("set_auto_approve", { enabled: true });
+    });
+
+    it("restores autoApprove from localStorage on new store creation", () => {
+      localStorage.setItem("autoApprove", "true");
+      setActivePinia(createPinia());
+      const store = useSettingsStore();
+      expect(store.autoApprove).toBe(true);
     });
   });
 

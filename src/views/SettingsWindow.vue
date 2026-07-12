@@ -9,7 +9,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import QRCode from "qrcode";
 
 const settings = useSettingsStore();
-const activeTab = ref<"icon" | "sound" | "imconfig" | "logs" | "about">("icon");
+const activeTab = ref<"icon" | "sound" | "function" | "imconfig" | "logs" | "about">("icon");
 const configPath = ref("");
 const configContent = ref("");
 const logDir = ref("");
@@ -131,6 +131,7 @@ async function reloadSounds() {
       <nav class="sidebar">
         <div class="nav-item" :class="{ active: activeTab === 'icon' }" @click="activeTab = 'icon'">Floating Icon</div>
         <div class="nav-item" :class="{ active: activeTab === 'sound' }" @click="activeTab = 'sound'">Sound</div>
+        <div class="nav-item" :class="{ active: activeTab === 'function' }" @click="activeTab = 'function'">Function</div>
         <div class="nav-item" :class="{ active: activeTab === 'imconfig' }" @click="activeTab = 'imconfig'">IMConfig</div>
         <div class="nav-item" :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'">Logs</div>
         <div class="nav-item" :class="{ active: activeTab === 'about' }" @click="activeTab = 'about'">About</div>
@@ -209,6 +210,22 @@ async function reloadSounds() {
               >{{ s.name }}</div>
             </div>
           </div>
+        </div>
+        <!-- Function -->
+        <div v-else-if="activeTab === 'function'" class="panel">
+          <h3>Function</h3>
+          <div class="log-toggle-row">
+            <span class="log-toggle-label">Auto-approve permission requests</span>
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="settings.autoApprove"
+                @change="settings.setAutoApprove(($event.target as HTMLInputElement).checked)"
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p class="log-hint">When enabled, tool permission requests from the Agent are approved automatically and sent back without a prompt. This bypasses all tool confirmations (including file writes and command execution) — use with caution.</p>
         </div>
         <!-- Config File -->
         <div v-else-if="activeTab === 'imconfig'" class="panel">
