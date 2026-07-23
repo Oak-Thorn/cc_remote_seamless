@@ -13,3 +13,28 @@ pub fn set_enabled(enabled: bool) {
 pub fn is_enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
+
+/// Tools that require the user to make a choice (not just grant/deny a
+/// side effect). Auto-approving these is meaningless: the permission is
+/// granted but no answer is produced, so the request must always be routed
+/// to the user regardless of the auto-approve toggle.
+pub fn requires_user_input(tool: &str) -> bool {
+    matches!(tool, "AskUserQuestion")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ask_user_question_requires_user_input() {
+        assert!(requires_user_input("AskUserQuestion"));
+    }
+
+    #[test]
+    fn side_effect_tools_do_not_require_user_input() {
+        assert!(!requires_user_input("Bash"));
+        assert!(!requires_user_input("Edit"));
+        assert!(!requires_user_input("Write"));
+    }
+}

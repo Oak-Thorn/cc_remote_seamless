@@ -236,7 +236,7 @@ pub fn run() {
                     }
 
                     if let HookEvent::PermissionRequest { ref session_id, ref tool, ref input, ref request_id, .. } = event {
-                        if auto_approve::is_enabled() {
+                        if auto_approve::is_enabled() && !auto_approve::requires_user_input(tool) {
                             if let Some(entry) = permission_waiters_for_hooks.lock().await.remove(request_id) {
                                 let _ = entry.sender.send(PermissionResponse::allow());
                                 tracing::info!("Auto-approved permission: tool={} id={}", tool, request_id);
@@ -313,7 +313,7 @@ pub fn run() {
                         }
                     }
                     if let HookEvent::PiPermissionRequest { ref session_id, ref tool, ref input, ref request_id, .. } = event {
-                        if auto_approve::is_enabled() {
+                        if auto_approve::is_enabled() && !auto_approve::requires_user_input(tool) {
                             if let Some(entry) = permission_waiters_for_hooks.lock().await.remove(request_id) {
                                 let _ = entry.sender.send(PermissionResponse::allow());
                                 tracing::info!("Auto-approved permission: tool={} id={}", tool, request_id);
