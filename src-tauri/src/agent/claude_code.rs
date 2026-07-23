@@ -104,7 +104,17 @@ impl ClaudeCodeConnector {
                 self.update_state(&session_id, SessionState::Busy, cwd);
             }
             HookEvent::PermissionRequest { session_id, tool, input, cwd, .. } => {
-                self.update_state(&session_id, SessionState::WaitingPermission, cwd);
+                // When the auto-approve toggle will resolve this request
+                // immediately (see the hook loop in lib.rs), skip the
+                // WaitingPermission transition: the session shouldn't flicker
+                // into "waiting" — nor play the permission sound — for a
+                // request no human will ever act on. Tools that require user
+                // input are never auto-approved, so they still wait here.
+                let will_auto_approve = crate::auto_approve::is_enabled()
+                    && !crate::auto_approve::requires_user_input(&tool);
+                if !will_auto_approve {
+                    self.update_state(&session_id, SessionState::WaitingPermission, cwd);
+                }
                 self.emit(AgentEvent::PermissionRequest { session_id, tool, input });
             }
             HookEvent::SessionEnd { session_id } => {

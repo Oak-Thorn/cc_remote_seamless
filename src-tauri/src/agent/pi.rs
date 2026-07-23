@@ -46,7 +46,14 @@ impl PiConnector {
                 self.upsert(&session_id, SessionState::Busy, cwd, None, None);
             }
             HookEvent::PiPermissionRequest { session_id, tool, input, cwd, .. } => {
-                self.upsert(&session_id, SessionState::WaitingPermission, cwd, None, None);
+                // Mirror the claude_code path: skip WaitingPermission (and its
+                // sound) when the auto-approve toggle will resolve this request
+                // immediately in the lib.rs hook loop.
+                let will_auto_approve = crate::auto_approve::is_enabled()
+                    && !crate::auto_approve::requires_user_input(&tool);
+                if !will_auto_approve {
+                    self.upsert(&session_id, SessionState::WaitingPermission, cwd, None, None);
+                }
                 self.emit(AgentEvent::PermissionRequest { session_id, tool, input });
             }
             HookEvent::PiStop { session_id, cwd } => {
