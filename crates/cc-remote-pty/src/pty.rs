@@ -11,7 +11,7 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    pub fn spawn(cmd: &str, args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn spawn(cmd: &str, args: &[String]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows: 24,

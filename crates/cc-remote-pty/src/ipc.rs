@@ -56,7 +56,8 @@ impl IpcServer {
                     let mut buf_reader = BufReader::new(reader);
                     let tx = input_tx.clone();
 
-                    let read_handle = tokio::spawn(async move {
+                    // Read the client's input lines into the input channel.
+                    let read_fut = async move {
                         let mut line = String::new();
                         loop {
                             line.clear();
@@ -72,19 +73,30 @@ impl IpcServer {
                                 Err(_) => break,
                             }
                         }
-                    });
+                    };
 
-                    let write_handle = tokio::spawn(async move {
-                        while let Some(text) = output_rx.recv().await {
+                    // Pump PTY output to the client. Borrow `output_rx` (rather
+                    // than move it) so the single receiver survives across
+                    // connections — otherwise the second `accept()` iteration
+                    // would try to reuse a moved value.
+                    let out_rx = &mut output_rx;
+                    let write_fut = async move {
+                        while let Some(text) = out_rx.recv().await {
                             let msg = protocol::encode(&PtyMessage::Output { data: text });
                             if writer.write_all(msg.as_bytes()).await.is_err() {
                                 break;
                             }
                         }
-                    });
+                    };
 
-                    let _ = read_handle.await;
-                    let _ = write_handle.await;
+                    // Whichever side finishes first ends the connection: a
+                    // closed client ends the read side, a closed PTY the write
+                    // side. Dropping the other future releases the `output_rx`
+                    // borrow so the next client can connect.
+                    tokio::select! {
+                        _ = read_fut => {}
+                        _ = write_fut => {}
+                    }
                 }
                 Err(e) => {
                     error!("IPC accept error: {}", e);
