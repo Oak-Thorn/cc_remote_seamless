@@ -27,7 +27,9 @@ use tokio::sync::{mpsc, Mutex};
 pub fn run() {
     let log_dir = logging::log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
-    logging::init(false, log_dir);
+    // Hold the appender guard for the whole app lifetime; it flushes buffered
+    // file logs on drop when run() returns at shutdown.
+    let _log_guard = logging::init(false, log_dir);
     logging::cleanup_old_logs(logging::RETAIN_DAYS);
 
     std::panic::set_hook(Box::new(|info| {
